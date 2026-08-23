@@ -276,7 +276,7 @@ The backbone of distributed tracing in Go
 
 # context.Context: The Propagation Vehicle
 
-```go {all|3-4|6-8|10-13|all}
+```go {all|3-4|6-7|9-12|all}
 // mobile-service - handler with context propagation
 func GetCourses(cfg config.Configs, logger log.Loggable, client tel.HttpClient) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
@@ -426,7 +426,7 @@ O middleware injeta trace context UMA VEZ - todas as chamadas logger.*Context(ct
 
 # Custom slog Handler - Extracting Context
 
-```go {all|1-4|5-7|8-10|11-15|16-18|all}
+```go {all|5-7|8-10|11-15|16-18|all}
 type appLoggerHandler struct {
     slog.Handler
     fixedAttributes []slog.Attr
@@ -500,19 +500,19 @@ nrslog.JSONHandler injeta trace_id/span_id automaticamente quando NR agent está
 
 # Correlated JSON Output
 
-```json {all|4-6|7-10|all}
+```json {all|6-7|8-10|11-12|all}
 {
   "time": "2025-03-15T10:23:45.123Z",
   "level": "INFO",
   "msg": "courses fetched",
+  "service": "mobile-service",
   "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
   "span_id": "00f067aa0ba902b7",
-  "service": "mobile-service",
+  "school_id": "42",
   "http.method": "GET",
   "http.path": "/api/v1/schools/42/courses",
   "mobile.device_os": "iOS",
   "mobile.app_version": "3.2.1",
-  "school_id": "42"
 }
 ```
 
@@ -570,7 +570,7 @@ factoru de controllers
 
 # Bootstrapping Telemetry
 
-```go {all|1-5|7-14|16-20|all}
+```go {all|1-5|7-12|16-20|all}
 // cmd/api/main.go - mobile-service (Go 1.22+, http.ServeMux, slog)
 func main() {
     cfg := config.NewConfig()
@@ -643,7 +643,7 @@ A ordem importa: APM middleware vem primeiro para que o transaction exista quand
 
 # Route Registration - Go 1.22+
 
-```go {all|2-3|5-8|14-17|all}
+```go {all|2-3|5-8|13-16|17|all}
 func (s *Server) HandlerRouters() http.Handler {
     // Public - no middleware
     s.Mux.HandleFunc("GET /__healthcheck__", controllers.Health)
@@ -762,7 +762,7 @@ listener são como controllers, a request seria a chegada de uma mensagem.
 
 # Manual Instrumentation - DB, SQS & HTTP
 
-```go {all|1-5|7-12|14-19|all}
+```go {all|1-6|8-13|15-19|all}
 // Database - using nrpgx driver for automatic query tracing
 db, _ := sql.Open("nrpgx",
     "host=localhost port=5432 user=postgres dbname=postgres sslmode=disable",
@@ -770,18 +770,18 @@ db, _ := sql.Open("nrpgx",
 // Every query with context will generate a Datastore segment in NR
 row := db.QueryRowContext(ctx, "SELECT count(*) FROM orders WHERE school_id = $1", schoolID)
 
-// SQS Consumer - manual transaction for async workers
-txn := app.StartTransaction("ProcessSQSMessage")
-ctx := newrelic.NewContext(context.Background(), txn)
-defer txn.End()
-// All downstream calls (DB, HTTP) within this ctx are traced
-
 // HTTP Client - wrap with newrelic round tripper
 client := &http.Client{
     Transport: newrelic.NewRoundTripper(http.DefaultTransport),
 }
 req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 resp, _ := client.Do(req) // Creates External segment + propagates trace headers
+
+// SQS Consumer - manual transaction for async workers
+txn := app.StartTransaction("ProcessSQSMessage")
+ctx := newrelic.NewContext(context.Background(), txn)
+defer txn.End()
+// All downstream calls (DB, HTTP) within this ctx are traced
 ```
 
 <v-click>
@@ -944,6 +944,8 @@ Experiência real usando o AI agent do New Relic nos últimos dias.
 A qualidade da instrumentação - logs estruturados, trace correlation, campos consistentes - é o que permite que agentes de IA naveguem e diagnostiquem problemas automaticamente.
 Se seus logs são fmt.Println, nenhum agente vai te ajudar.
 O investimento em observabilidade bem feita paga dobrado: humanos debugam melhor E agentes de IA também.
+
+Basicamente é um prompt bem feito!
 -->
 
 ---
@@ -978,18 +980,19 @@ layout: center
 
 # Key Takeaways
 
-| Principle | Practice |
-|-----------|----------|
-| Context is the backbone | `context.Context` everywhere |
-| Instrument at boundaries | Middleware handles 80% of needs |
-| Correlate everything | Trace ID in logs - zero manual effort |
-| Own the abstraction | Library wraps vendor - migration is a refactor |
-| Start pragmatic | Vendor SDK directly, OTel when ready |
-| Standardize | One library, one init call, consistent output |
-| **Go's explicitness is a feature** | **Intentional signals > automatic noise** |
+<v-clicks>
+
+- Pass `context.Context` everywhere - it's how traces, logs, and metrics connect
+- Instrument at the edges (middleware/clients) - it covers 80% of what you need
+- Build a shared library - don't let each team reinvent instrumentation (otel?)
+- Good observability today = better AI/human debugging tomorrow
+- **Go's explicitness is a feature - intentional signals > automatic noise**
+
+</v-clicks>
 
 <!--
-Esses princípios guiam qualquer decisão de observabilidade em Go.
+Resumo prático: contexto, middleware, biblioteca compartilhada, pragmatismo.
+Go te força a ser explícito - e isso é uma vantagem.
 -->
 
 ---
@@ -1007,6 +1010,9 @@ Observability in Go is engineering - explicit, intentional, and architecturally 
 
 <!--
 Observabilidade não é sobre ferramentas - é sobre decisões de design.
+- explicito
+- intencianak
+- arquitetonicamente sólido
 -->
 
 ---
