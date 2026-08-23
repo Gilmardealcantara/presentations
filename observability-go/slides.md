@@ -1,0 +1,1025 @@
+---
+theme: default
+title: "Architecting Observability in Go"
+info: |
+  Context Propagation, Structured Logging, and Telemetry Strategy.
+  Based on a real-world observability migration at Hotmart/Teachable.
+  GopherCon LATAM 2026
+colorSchema: dark
+lineNumbers: true
+fonts:
+  sans: Inter
+  mono: Fira Code
+  provider: google
+drawings:
+  persist: false
+---
+
+# Architecting Observability in Go
+
+Context Propagation, Structured Logging, and Telemetry Strategy
+<!-- <div class="pt-12"> -->
+  <span class="opacity-60">
+    Gilmar Alcantara - Hotmart
+  </span>
+<!-- </div> -->
+
+
+<img src="/bg-cover.png" class="gopher-bg" />
+
+<!--
+Observabilidade não é um checkbox de ferramenta - é uma decisão de arquitetura.
+Em Go, essa decisão é ainda mais evidente porque nada acontece automaticamente.
+-->
+
+---
+
+# About Me
+
+<div class="grid grid-cols-2 gap-8 mt-6">
+<div>
+
+**Gilmar Alcantara**
+
+- 🏢 Staff Engineer at **Hotmart**
+- 💼 *+10 years* of software engineering experience
+- 🐹 Go enthusiast - building microservices at scale
+- 🔭 Focused on **observability**, **platform engineering**, and **international regulations**
+
+</div>
+<div>
+
+- 🎓 Bachelor of Computer Engineering from **CEFET-MG**
+- 🌎 Based in Brazil (Minas Gerais)
+- 👨‍👦 Father of **Benjamin** (9 years) and **Levi** (2 months)
+- 🎯 Passionate about making the right thing easy for engineering teams
+- 🌍 Now working with **international financial regulations** at Hotmart
+
+
+</div>
+</div>
+
+<img src="/sons.png" class="sons-photo" />
+
+<!--
+Me apresentando brevemente antes de entrar no conteúdo técnico.
+Formado pelo CEFET-MG, passei por varias outras empresas como a IBM, e hoje atuo no time financeiro da Hotmart com regulamentações internacionais.
+-->
+
+---
+
+# About This Talk
+
+Based on a **real-world experience** leading an observability migration at **Hotmart** - a global edtech company that also operates **Teachable**.
+
+<v-clicks>
+
+- **Datadog → New Relic migration** driven by cost reduction (free data quota on NR contract)
+- Led the **Go microservices** instrumentation strategy under a tight deadline
+- Collaborated on **Ruby and Java** service instrumentation
+- Not a vendor comparison - **architectural learnings** and practical decisions
+- **Observability is an architectural decision, and in Go, it is explicit by design.**
+
+
+</v-clicks>
+
+<!--
+Essa palestra vem de experiência real. Liderei a frente de instrumentação Go na migração de Datadog para New Relic.
+Não é sobre comparar ferramentas - é sobre as decisões arquiteturais que fizemos e por quê.
+-->
+
+---
+layout: section
+---
+
+# The Migration Context
+
+---
+
+# The Landscape
+
+```mermaid
+graph TD
+  A[Hotmart Group] --> B[Hotmart: Java/Kotlin]
+  A --> C[Teachable: Rails + Go]
+  A --> D[eNotas: .NET]
+  A --> R[Reshape: Python/AI]
+  C --> E[Rails Monolith]
+  C --> F[mobile-service]
+  C --> G[integrations-service]
+```
+
+<v-clicks>
+
+- **Hotmart** acquired **Teachable** in 2021
+- Hotmart was already using **New Relic** (Java/Kotlin)
+- Teachable was on **Datadog** - Rails monolith + Go microservices
+- The migration happened only on **Teachable's side** (Ruby + Go)
+
+</v-clicks>
+
+<!--
+Hotmart comprou Teachable em 2021. Duas plataformas, stacks diferentes.
+Teachable está migrando do monolith Rails para microservices em Go - e a observabilidade precisa cobrir tudo.
+-->
+
+---
+
+# Why the Migration Was Hard
+
+<v-clicks>
+
+- **Cost reduction was the primary driver** - free data quota on the New Relic contract eliminated all Datadog costs
+- **Tight deadline** - Datadog contract was expiring, no room for extended timelines
+- **Different runtimes, different instrumentation models** - auto-agent (Java, Ruby) vs manual (Go)
+- **No shared standards** - each service had its own logging format, trace setup
+- **Some Go services had zero instrumentation** in some cases - raw `fmt.Println`
+- **OpenTelemetry Collector adds too much DevOps effort** - deploying and maintaining a Collector infrastructure was not viable in the limited time window
+
+</v-clicks>
+
+<v-click>
+
+> The deadline pressure is also why we didn't migrate to OpenTelemetry directly - vendor SDK was the fastest path to production with quality.
+
+</v-click>
+
+<!--
+O driver principal foi custo: free data quota no contrato NR eliminou todo custo com DD.
+Mas o prazo apertado do contrato DD expirando nos forçou a ser pragmáticos - OTel direto era risco demais.
+
+- Fluentd, para to get logs from pods and send to K8s
+- Posteriormente também é sabido que poderimos optar por usar os coletores dos parceiros...
+-->
+
+---
+layout: section
+---
+
+# Why Observability in Go is Different
+
+---
+layout: two-cols
+---
+
+# Automatic vs Manual Instrumentation
+
+**JIT/Interpreted Languages**
+(Java, Ruby, Node.js)
+
+- Runtime agents intercept calls
+- Automatic span creation
+- Low initial effort
+- Less control, more noise
+
+::right::
+
+**Go (Compiled)**
+
+- Explicit instrumentation in code
+- Developer decides span boundaries
+- Higher initial effort
+- Full control, clean signals
+
+<v-click>
+
+<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 More upfront work, but <strong>significantly better signal-to-noise ratio</strong>.
+</div>
+
+</v-click>
+
+<!--
+Na migração, os serviços Java e Ruby foram "fáceis" - instala o agent e pronto.
+Go exigiu design. Mas o resultado é mais limpo e controlável.
+
+Reflection and 
+Java aspects!
+
+Podemos instrumentar caminihos críticos da aplicação e evitar caminhos simples como health checks
+Momento do produto
+Time mais/menos senior...
+
+-->
+
+---
+
+# How the Three Pillars Connect
+
+```mermaid
+graph LR
+  A[Request] --> B[HTTP Middleware]
+  B --> C[context.Context]
+  C --> D[Traces / Spans]
+  C --> E[Structured Logs]
+  C --> F[Metrics]
+  D --> G[Trace ID]
+  E --> G
+  F --> G
+  G --> H[Correlated Telemetry]
+```
+
+<v-clicks>
+
+- **Traces** - show the path of a request across services and measure latency at each hop
+- **Logs** - provide detailed event records with business context at each step
+- **Metrics** - aggregate numerical data (request count, error rate, latency percentiles)
+- The **correlation key** is always the same: **Trace ID** propagated via `context.Context`
+- Without correlation, logs are isolated events and metrics are numbers without context
+
+</v-clicks>
+
+<!--
+O trace ID é o que conecta tudo. Sem ele, logs são eventos isolados e métricas são números sem contexto.
+
+- Metricas devem ser usadas para alertas, não logs
+- Logs devem ser os ultimos analizados em um incidente, 
+- O  objeto é encontrar o log!
+-->
+
+---
+disabled: true
+---
+
+# Why Not OpenTelemetry (Yet)?
+
+<v-clicks>
+
+- **Tight deadline** - DD contract expiring, no time for OTel Collector infrastructure setup
+- OTel Collector requires **dedicated infrastructure** - CPU, memory, networking, operational expertise
+- Adds a **new failure point** in the telemetry pipeline
+- New Relic Go agent = **proven, fast to implement**, already covered by the new contract
+- OTel is the strategic direction - but **not under deadline pressure**
+
+</v-clicks>
+
+<v-click>
+
+> Pragmatism over idealism: vendor SDK now, abstraction layer for OTel later. Ship fast, migrate cleanly.
+
+</v-click>
+
+<!--
+Com o contrato DD vencendo, não tínhamos tempo pra montar infra de Collector.
+NR agent era o caminho mais rápido pra produção com qualidade. OTel fica pro futuro.
+-->
+
+---
+layout: section
+---
+
+# Context Propagation
+
+The backbone of distributed tracing in Go
+
+---
+
+# context.Context: The Propagation Vehicle
+
+```go {all|3-4|6-8|10-13|all}
+// mobile-service - handler with context propagation
+func GetCourses(cfg config.Configs, logger log.Loggable, client tel.HttpClient) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        ctx := r.Context()
+
+        schoolID := r.PathValue("school_id")
+        courses, err := fetchCourses(ctx, client, cfg, schoolID)
+        if err != nil {
+            logger.ErrorContext(ctx, "failed to fetch courses",
+                "school_id", schoolID,
+                "error", err,
+            )
+            http.Error(w, "internal error", http.StatusInternalServerError)
+            return
+        }
+
+        writeJSON(w, courses)
+    }
+}
+```
+
+<!--
+O context carrega trace info, deadlines, e cancellation - tudo junto.
+Cada função que recebe ctx participa do trace automaticamente via New Relic.
+
+- Injeção de dependência.
+- closures
+
+-->
+
+---
+
+# The Golden Rule of Context in Go
+
+<v-clicks>
+
+1. **Always accept `context.Context` as the first parameter**
+2. **Always propagate it downstream** - never discard
+3. **Never store context in structs** - it's request-scoped
+4. **Use `context.Background()` only at entry points** (main, init, tests)
+
+</v-clicks>
+
+<v-click>
+
+```go
+// ✅ Correct - context flows naturally
+func (r *Repo) GetUser(ctx context.Context, id string) (*User, error)
+
+// ❌ Wrong - context stored in struct, loses request scope
+type Repo struct {
+    ctx context.Context  // DON'T DO THIS
+}
+```
+
+</v-click>
+
+<!--
+Contexto em struct é um anti-pattern clássico. Ele é request-scoped - armazená-lo quebra traces.
+-->
+
+---
+layout: section
+---
+
+# Structured Logging with Trace Correlation
+
+---
+
+# From Printf to slog with Trace ID
+
+````md magic-move
+```go
+// ❌ Unstructured - impossible to query or correlate
+log.Printf("order %s processed for user %s", orderID, userID)
+```
+```go
+// ⚠️ Structured but no trace correlation
+slog.Info("order processed",
+    "order_id", orderID,
+    "user_id", userID,
+)
+```
+```go
+// ✅ Structured + trace-correlated via context
+logger.InfoContext(ctx, "order processed",
+    "order_id", orderID,
+    "user_id", userID,
+)
+// trace_id and span_id injected automatically by the log middleware
+```
+````
+
+<v-click>
+
+The log middleware injects `trace_id` and `span_id` from New Relic - **zero effort at call sites**.
+
+</v-click>
+
+<!--
+slog é padrão desde Go 1.21. O tlog.Middleware injeta trace info no log record automaticamente.
+-->
+
+---
+
+# How tlog Middleware Works
+
+```go {all|4-5|7-8|10-15|all}
+// log middleware - extracts NR trace info and injects into slog context
+func Middleware(cfg config.Config) func(next http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            ctx := r.Context()
+
+            // Extract trace_id and span_id from NR transaction
+            traceID, spanID := tel.TraceFromContext(ctx)
+
+            // Inject into slog context for all downstream logs
+            ctx = contextWithFields(ctx,
+                slog.String("trace_id", traceID),
+                slog.String("span_id", spanID),
+                slog.String("http.method", r.Method),
+                slog.String("http.path", r.URL.Path),
+            )
+
+            next.ServeHTTP(w, r.WithContext(ctx))
+        })
+    }
+}
+```
+
+<v-click>
+
+<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 This enriched context is propagated in every <code>logger.*Context(ctx, ...)</code> slog call downstream.
+</div>
+
+</v-click>
+
+<!--
+O middleware injeta trace context UMA VEZ - todas as chamadas logger.*Context(ctx, ...) herdam isso.
+
+- Não exquecer que esse contexto que estamos enriquecendo é enviado nas chamadas do slog
+-->
+
+---
+
+# Custom slog Handler - Extracting Context
+
+```go {all|1-4|5-7|8-10|11-15|16-18|all}
+type appLoggerHandler struct {
+    slog.Handler
+    fixedAttributes []slog.Attr
+}
+func NewHandler(handler slog.Handler, attrs ...slog.Attr) *appLoggerHandler {
+    return &appLoggerHandler{handler, attrs}
+}
+func (h appLoggerHandler) Handle(ctx context.Context, r slog.Record) error {
+    // Fixed attributes (app_name, env, pod_name)
+    r.AddAttrs(h.fixedAttributes...)
+    // Trace correlation from NR transaction
+    if info, ok := telemetry.TraceFromContext(ctx); ok {
+        r.Add(slog.String("trace.id", info.TraceId))
+        r.Add(slog.String("span.id", info.SpanId))
+    }
+    // HTTP request info, account, custom fields from context...
+    return h.Handler.Handle(ctx, r)
+}
+```
+
+<v-click>
+
+<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 The custom handler bridges context and slog - every <code>logger.InfoContext(ctx, ...)</code> call automatically includes trace_id, span_id, and all enriched fields without the caller needing to pass them explicitly.
+</div>
+
+</v-click>
+
+<!--
+Esse é o "truque" da nossa lib: um handler customizado que pega tudo do context e injeta no record.
+O desenvolvedor só precisa passar ctx - o handler faz o resto.
+-->
+
+---
+
+# Inside Initialize - Enforcing the Standard
+
+```go {all|3-7|8|9-10|11|12-14|all}
+func Setup(cfg config.Config) (*slog.Logger, error) {
+    // ...
+    fixedAttributes := []slog.Attr{
+        slog.String("app_name", cfg.ServiceName),
+        slog.String("app_version", cfg.Version),
+        slog.String("env", cfg.AppEnv),
+    }
+    var appHandler *appLoggerHandler
+    // NR agent available → JSON + trace correlation
+    nrHandler := nrslog.JSONHandler(telemetry.App, cfg.LogOutput, &options)
+    appHandler = NewHandler(nrHandler, fixedAttributes...)
+    logger := slog.New(appHandler)
+    slog.SetDefault(logger) // Third-party code also gets the standard
+    return logger, nil
+}
+```
+
+<v-clicks>
+
+- **Fixed attributes** → every log has `app_name`, `env`, `pod_name` automatically
+- **`NewHandler`** → wraps inner handler with our custom `appLoggerHandler`
+- **`slog.SetDefault`** → even third-party libs follow the same standard
+
+</v-clicks>
+
+<!--
+Esse é o coração do padrão: a inicialização garante que NENHUM log sai sem app_name, env, pod_name.
+slog.SetDefault faz com que até código de terceiros (libs) use o mesmo handler.
+nrslog.JSONHandler injeta trace_id/span_id automaticamente quando NR agent está ativo.
+-->
+
+---
+
+# Correlated JSON Output
+
+```json {all|4-6|7-10|all}
+{
+  "time": "2025-03-15T10:23:45.123Z",
+  "level": "INFO",
+  "msg": "courses fetched",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "span_id": "00f067aa0ba902b7",
+  "service": "mobile-service",
+  "http.method": "GET",
+  "http.path": "/api/v1/schools/42/courses",
+  "mobile.device_os": "iOS",
+  "mobile.app_version": "3.2.1",
+  "school_id": "42"
+}
+```
+
+<v-click>
+
+**Jump from log → trace** in New Relic. Filter by trace_id for full request lifecycle. Correlate mobile device context with backend errors.
+
+</v-click>
+
+<!--
+O additionalLogHeaderData injeta contexto mobile - invaluável para debugging por device.
+-->
+
+---
+layout: section
+---
+
+# The Shared Telemetry Library
+
+Centralizing observability for Go microservices
+
+---
+
+# Architecture: Shared Telemetry Library
+
+```mermaid
+graph TD
+  A[Shared Observability Lib] --> B[APM / Tracing]
+  A --> C[Structured Logging]
+  A --> D[Gin Middleware]
+  A --> E[Zap Adapter]
+  B --> F[New Relic APM]
+  B --> G[HTTP Client Instrumentation]
+  B --> H[Metrics]
+  C --> I[slog + Trace Correlation]
+  D --> J[Gin Middleware]
+```
+
+<v-click>
+
+One library. One `Initialize()` call. Every service starts from the same baseline.
+
+</v-click>
+
+<!--
+A lib nasceu dessa migração. Em vez de cada serviço fazer sua instrumentação, centralizamos tudo.
+
+- Arquitetura de referencia: http mux (go 1.21) e slog
+- Suport a  gin e zap....
+
+factoru de controllers
+-->
+
+---
+
+# Bootstrapping Telemetry
+
+```go {all|1-5|7-14|16-20|all}
+// cmd/api/main.go - mobile-service (Go 1.22+, http.ServeMux, slog)
+func main() {
+    cfg := config.NewConfig()
+    ctx := context.Background()
+
+    // One call: configures New Relic + slog + trace correlation
+    logInstance, err := tel.Initialize(
+        tel.WithServiceName(cfg.AppName),
+        tel.WithLogLevel(cfg.LogLevel),
+        tel.WithEnv(cfg.AppEnv),
+        tel.WithVersion(cfg.DevopsCommit),
+    )
+    if err != nil {
+        panic(err)
+    }
+
+    logger := log.New(logInstance)
+    nrApp := tel.NRApp
+    defer nrApp.Shutdown(8 * time.Second)
+    // ... db, feature flags, http client, server setup
+}
+```
+
+<!--
+Uma única chamada configura New Relic + slog + trace correlation.
+Functional options permitem flexibilidade sem quebrar a interface.
+-->
+
+---
+layout: section
+---
+
+# HTTP Middleware Patterns
+
+Consistent instrumentation at the edge
+
+---
+
+# Middleware Stack
+
+```go {all|2|3-10|11-12|14-15|all}
+func getGlobalMiddlewares(cfg config.Configs, httpClient tel.HttpClient) []MiddlewareType {
+    nrMdd := tel.APMMiddleware              // starts NR transaction
+    logMdd := tlog.Middleware(              // structured request logging
+        tlog.WithRequestInfoLog(false),
+        tlog.WithAdditionalLogHeaderData(map[string]string{
+            "mobile.device_os":   "X-DEVICE-OS",
+            "mobile.device_id":   "X-DEVICE-ID",
+            "mobile.app_version": "X-APP-VERSION",
+        }),
+    )
+    authMdd := auth.Middleware(httpClient, cfg)
+    sentryMdd := sentry.NewSentryMiddleware()
+
+    // Execution order: NR → Log → Sentry → Auth → Handler
+    return []MiddlewareType{newRelicExtraData, authMdd, logMdd, sentryMdd.Handle, nrMdd}
+}
+```
+
+<!--
+A ordem importa: APM middleware vem primeiro para que o transaction exista quando o log middleware executa.
+
+- Aplicações com ruby/java colocamos as libs e logamos tudo.
+- Tomar cuidado para não local healthches e info de forma desnecessária.
+- Para o casos de sucesso a métrica resolve o aleta!
+
+-->
+
+---
+
+# Route Registration - Go 1.22+
+
+```go {all|2-3|5-8|14-17|all}
+func (s *Server) HandlerRouters() http.Handler {
+    // Public - no middleware
+    s.Mux.HandleFunc("GET /__healthcheck__", controllers.Health)
+
+    // Protected - full middleware chain
+    s.registerRouter("GET /api/v1/schools/{school_id}/courses",
+        controllers.GetCourses(s.Cfg, s.logger, s.HttpClient, s.FFClient),
+    )
+}
+
+func (s *Server) registerRouter(pattern string, handler http.Handler) {
+    withMiddlewares := handler
+    // Provided by last function: getGlobalMiddlewares
+    for _, md := range s.Middlewares {
+        withMiddlewares = md(withMiddlewares)
+    }
+    s.Mux.Handle(pattern, withMiddlewares)
+}
+```
+
+<v-clicks>
+
+- **Middleware chaining** - each middleware wraps the handler with additional behavior
+- **Decorator pattern** - `func(http.Handler) http.Handler` composed in sequence
+- **Fold/reduce** over the middleware slice - each iteration wraps the previous result
+
+</v-clicks>
+
+<!--
+Go 1.22+ trouxe method+path no ServeMux nativo. Não precisamos mais de gorilla/mux.
+
+- K8s health endpoint
+- getGlobalMiddlewares -> s.Middlewares
+-->
+
+---
+layout: section
+---
+
+# Enriching Telemetry
+
+---
+
+# Business Context in Traces
+
+```go {all|3-5|7-12|all}
+// Enrich NR transaction with business dimensions
+func newRelicExtraDataMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        acc, _ := models.AccountFromContext(r.Context())
+        txn := newrelic.FromContext(r.Context())
+
+        if txn != nil {
+            txn.AddAttribute("teachableAccount", acc.Id)
+            txn.AddAttribute("userId", acc.UserId)
+            txn.AddAttribute("schoolId", acc.SchoolId)
+            for desc, headerKey := range additionalHeaderData {
+                txn.AddAttribute(desc, r.Header.Get(headerKey))
+            }
+        }
+        next.ServeHTTP(w, r)
+    })
+}
+```
+
+<v-click>
+
+Query traces by **business dimensions** - school, user, device - not just HTTP status codes.
+
+</v-click>
+
+<!--
+"Mostra requests do school 42 com app version < 3.0" - agora é possível.
+-->
+
+---
+disabled: true
+---
+
+# HTTP Client & Custom Metrics
+
+```go {all|1-5|7-9|11-13|all}
+// Instrumented HTTP client - auto child spans + trace propagation
+httpClient := tel.NewHttpClient(baseClient)
+resp, err := httpClient.Do(req)
+// ↑ Creates External segment in NR
+// ↑ Propagates distributed trace headers automatically
+
+// Custom business metrics
+tel.RecordMetric("Custom/CoursesLoaded", len(courses))
+tel.IncrementMetric("Custom/API/Schools/Requests")
+
+// Manual transactions for async workers (SQS consumers)
+ctx := tel.StartTransaction(ctx, "ProcessSQSMessage")
+defer tel.EndTransaction(ctx, "ProcessSQSMessage")
+```
+
+<v-click>
+
+Instrumented client = distributed tracing across boundaries. Manual transactions = visibility into async work.
+
+</v-click>
+
+<!--
+Sem o client instrumentado, chamadas entre serviços seriam invisíveis.
+Sem StartTransaction, SQS consumers não teriam traces.
+
+É como uma bolsa, alguém tem que saber colocar e também temos que saber retirar e propagar.
+
+Vamos precisar de funções helpers que vão remover o traces de nosso conrxto e formatar para as nossas ingrações, banco de dados, e http client por exemplo.
+
+listener são como controllers, a request seria a chegada de uma mensagem.
+-->
+
+---
+
+# Manual Instrumentation - DB, SQS & HTTP
+
+```go {all|1-5|7-12|14-19|all}
+// Database - using nrpgx driver for automatic query tracing
+db, _ := sql.Open("nrpgx",
+    "host=localhost port=5432 user=postgres dbname=postgres sslmode=disable",
+)
+// Every query with context will generate a Datastore segment in NR
+row := db.QueryRowContext(ctx, "SELECT count(*) FROM orders WHERE school_id = $1", schoolID)
+
+// SQS Consumer - manual transaction for async workers
+txn := app.StartTransaction("ProcessSQSMessage")
+ctx := newrelic.NewContext(context.Background(), txn)
+defer txn.End()
+// All downstream calls (DB, HTTP) within this ctx are traced
+
+// HTTP Client - wrap with newrelic round tripper
+client := &http.Client{
+    Transport: newrelic.NewRoundTripper(http.DefaultTransport),
+}
+req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+resp, _ := client.Do(req) // Creates External segment + propagates trace headers
+```
+
+<v-click>
+
+<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 The key pattern: pass <code>context.Context</code> with the NR transaction to every integration - the SDK handles segment creation automatically.
+</div>
+
+</v-click>
+
+<!--
+Cada integração tem seu wrapper NR: nrpgx para Postgres, NewRoundTripper para HTTP, StartTransaction para SQS.
+O padrão é sempre o mesmo: ctx com transação → segmento automático.
+-->
+
+---
+layout: section
+---
+
+# Multi-Runtime Challenges
+
+---
+
+# The Polyglot Reality
+
+| Aspect | Go (shared lib) | Ruby (NR agent) | Java (NR agent) |
+|--------|-----------|-----------------|-----------------|
+| Instrumentation | Manual via library | Automatic agent | Automatic agent |
+| Trace propagation | Explicit via `ctx` | Agent handles | Agent handles |
+| Log correlation | Log middleware injects trace_id | Agent injects | Agent injects |
+| Migration effort | **High** (build library) | Low (swap agent) | Low (swap agent) |
+| Signal quality | High (intentional) | Variable (noisy) | Variable (noisy) |
+
+<v-click>
+
+**Key insight**: Go required the most effort but produced the **cleanest signals**. The investment paid off.
+
+</v-click>
+
+<!--
+Ruby e Java: swap de agent, reinicia, done. Go exigiu criar a lib inteira.
+Mas o resultado em Go é muito mais limpo.
+-->
+
+---
+disabled: true
+---
+
+# Cross-Service Trace Flow
+
+```mermaid
+sequenceDiagram
+    participant Mobile App
+    participant mobile-service (Go)
+    participant Rails Monolith (Ruby)
+    participant integrations-service (Go)
+    participant External API
+
+    Mobile App->>mobile-service (Go): GET /api/v1/schools/42/courses
+    Note over mobile-service (Go): tel.APMMiddleware starts txn
+    mobile-service (Go)->>Rails Monolith (Ruby): HTTP + NR trace headers
+    Note over Rails Monolith (Ruby): NR Ruby agent auto-traces
+    Rails Monolith (Ruby)-->>mobile-service (Go): courses data
+    mobile-service (Go)->>integrations-service (Go): HTTP + NR trace headers
+    Note over integrations-service (Go): tel.APMMiddleware starts txn
+    integrations-service (Go)->>External API: webhook delivery
+    mobile-service (Go)-->>Mobile App: JSON response
+```
+
+<!--
+O trace completo aparece no New Relic - Go, Ruby, externo - tudo conectado.
+-->
+
+---
+layout: section
+---
+
+# Governance & Sustainability
+
+---
+
+# The Instrumentation Contract
+
+<v-clicks>
+
+- **Every HTTP server** → `tel.APMMiddleware` + `tlog.Middleware`
+- **Every HTTP client** → `tel.NewHttpClient()` for auto span propagation
+- **Every log line** → `logger.*Context(ctx, ...)` - never `fmt.Println`
+- **Every service** → `tel.Initialize(...)` at startup
+- **Always pass `context.Context`** explicitly - especially to external calls
+
+</v-clicks>
+
+<v-click>
+
+> Any engineer can look at any service's telemetry and **immediately understand it** - same structure, same semantics.
+
+</v-click>
+
+<!--
+Padronização é o que transforma observabilidade de ferramenta em plataforma.
+-->
+
+---
+
+# Next Steps - The Future
+
+<v-clicks>
+
+- **Third-party vendors now provide managed OTel Collectors** - no need to deploy and maintain our own
+- **We already proved this works** - eNotas (.NET/C#) is sending telemetry via vendor-managed OTel Collector
+- **`go-easy-instrumentation`** - New Relic's tool that suggests instrumentation changes to Go source code automatically
+- **Alibaba + Datadog → OTel SIG** - Datadog's Orchestrion (compile-time instrumentation via `-toolexec`) was donated to OpenTelemetry, creating a vendor-neutral standard
+- **OTel Compile-Time Instrumentation (`otelc`)** - the result of that initiative; uses Go's `-toolexec` build flag to inject tracing at compilation, zero source code changes (v1 released July 2026)
+
+</v-clicks>
+
+<v-click>
+
+```bash
+# OTel compile-time instrumentation - just change how you build
+go build -toolexec otelc ./cmd/api
+# Same source code, instrumented binary. No manual spans needed.
+```
+
+</v-click>
+
+<!--
+Orchestrion da Datadog foi o precursor - compile-time instrumentation usando -toolexec do Go.
+Em 2025, Alibaba e Datadog doaram seus engines para a OTel, formando a Go Compile-Time Instrumentation SIG.
+O resultado é o otelc - vendor neutral, v1 lançado em julho 2026.
+Já fizemos OTel com eNotas em C#. Go é o próximo passo.
+go-easy-instrumentation sugere mudanças no código fonte automaticamente (diff-based, mais simples).
+-->
+
+---
+
+# AI Agents & Observability - The Next Frontier
+
+Your instrumentation quality **directly impacts** how well AI agents can debug your systems.
+
+<v-clicks>
+
+- **Structured logs are machine-readable** - AI agents parse JSON logs effortlessly; `fmt.Println` is a dead end
+- **Trace correlation enables reasoning** - agents follow a trace_id across services to reconstruct the full story
+- **Consistent field names = better search** - `app_name`, `school_id`, `error` are queryable dimensions for AI tools
+- **Real experience**: New Relic AI agent accurately diagnosed production issues by navigating structured telemetry - because the data was clean and correlated
+- **The investment in the shared library pays double** - humans AND AI agents benefit from the same instrumentation quality
+
+</v-clicks>
+
+<v-click>
+
+> The code you instrument today is the context AI agents will reason about tomorrow. Make it searchable, structured, and correlated.
+
+</v-click>
+
+<!--
+Experiência real usando o AI agent do New Relic nos últimos dias.
+A qualidade da instrumentação - logs estruturados, trace correlation, campos consistentes - é o que permite que agentes de IA naveguem e diagnostiquem problemas automaticamente.
+Se seus logs são fmt.Println, nenhum agente vai te ajudar.
+O investimento em observabilidade bem feita paga dobrado: humanos debugam melhor E agentes de IA também.
+-->
+
+---
+disabled: true
+---
+
+# Lessons Learned
+
+<v-clicks>
+
+1. **Migrations are opportunities** - don't just swap SDKs, redesign the approach
+
+2. **Go requires upfront investment** - but returns compound interest in signal quality
+
+3. **A shared library is non-negotiable** - without it, every team reinvents instrumentation
+
+4. **Make the right thing easy** - not the wrong thing impossible
+
+5. **Polyglot environments need a common contract** - trace headers are the universal language
+
+6. **Prefer `slog`** - it's standard, fast, and integrates with everything
+
+</v-clicks>
+
+<!--
+Esses são os aprendizados reais da migração. Cada um veio de um problema concreto.
+-->
+
+---
+layout: center
+---
+
+# Key Takeaways
+
+| Principle | Practice |
+|-----------|----------|
+| Context is the backbone | `context.Context` everywhere |
+| Instrument at boundaries | Middleware handles 80% of needs |
+| Correlate everything | Trace ID in logs - zero manual effort |
+| Own the abstraction | Library wraps vendor - migration is a refactor |
+| Start pragmatic | Vendor SDK directly, OTel when ready |
+| Standardize | One library, one init call, consistent output |
+| **Go's explicitness is a feature** | **Intentional signals > automatic noise** |
+
+<!--
+Esses princípios guiam qualquer decisão de observabilidade em Go.
+-->
+
+---
+layout: center
+class: text-center
+---
+
+# Thank You
+
+Observability in Go is engineering - explicit, intentional, and architecturally sound.
+
+<div class="text-sm opacity-60 mt-4">
+  Gilmar Alcantara - Hotmart
+</div>
+
+<!--
+Observabilidade não é sobre ferramentas - é sobre decisões de design.
+-->
+
+---
+layout: end
+disabled: true
+---
+
+<div class="absolute top-10 left-0 right-0 text-center z-20">
+  <h1 class="text-4xl font-bold text-white">Thank You</h1>
+  <p class="text-base opacity-80 mt-3">Observability in Go is engineering - explicit, intentional, and architecturally sound.</p>
+  <p class="text-sm opacity-60 mt-2">Gilmar Alcantara - Hotmart</p>
+</div>
+
+<!--
+GopherCon LATAM 2026
+-->
