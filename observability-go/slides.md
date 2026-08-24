@@ -387,20 +387,19 @@ slog é padrão desde Go 1.21. O tlog.Middleware injeta trace info no log record
 
 # How log Middleware Works
 
-```go {all|4-5|7-8|10-16|17|all}
-// Extracts NR trace info (Added by APM Middleware) and injects into slog context
+```go {all|5-7|9-15|16|all}
+// Extracts NR trace info (added by APM Middleware) and injects into slog context
 func Middleware(cfg config.Config) func(next http.Handler) http.Handler {
     return func(next http.Handler) http.Handler {
-        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            ctx := r.Context()
-
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {            
             // Extract trace_id and span_id from NR transaction
+            ctx := r.Context() // already has NR transaction (from APM Middleware)
             traceID, spanID := tel.TraceFromContext(ctx)
 
             // Inject into slog context for all downstream logs
             ctx = contextWithFields(ctx,
-                slog.String("trace_id", traceID),
-                slog.String("span_id", spanID),
+                slog.String("trace_id", traceID), // to be agnostic!
+                slog.String("span_id", spanID), // to be agnostic!
                 slog.String("http.method", r.Method),
                 slog.String("http.path", r.URL.Path),
             )
@@ -413,15 +412,15 @@ func Middleware(cfg config.Config) func(next http.Handler) http.Handler {
 <v-click>
 
 <div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
-💡 This enriched context is propagated in every <code>logger.*Context(ctx, ...)</code> slog call downstream.
+💡 The APM Middleware already adds trace_id/span_id to context. Here we're just <strong>reading</strong> them and adding extra context (method, path) for structured logging.
 </div>
 
 </v-click>
 
 <!--
 O middleware injeta trace context UMA VEZ - todas as chamadas logger.*Context(ctx, ...) herdam isso.
-
-- Não exquecer que esse contexto que estamos enriquecendo é enviado nas chamadas do slog
+Quem coloca o trace no context é o APM Middleware (New Relic). Esse middleware apenas lê e enriquece o slog.
+Não exquecer que esse contexto que estamos enriquecendo é enviado nas chamadas do slog.
 -->
 
 ---
@@ -460,6 +459,55 @@ func (h appLoggerHandler) Handle(ctx context.Context, r slog.Record) error {
 <!--
 Esse é o "truque" da nossa lib: um handler customizado que pega tudo do context e injeta no record.
 O desenvolvedor só precisa passar ctx - o handler faz o resto.
+-->
+
+---
+
+# Logger in Context vs Values in Context
+
+````md magic-move
+```go
+// ❌ Common pattern (zerolog, logrus): store logger instance in context
+func Middleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        logger := zerolog.Ctx(r.Context()).With().
+            Str("trace_id", traceID).
+            Str("http.method", r.Method).Logger()
+        ctx := logger.WithContext(r.Context()) // logger IN context
+        next.ServeHTTP(w, r.WithContext(ctx))
+    })
+}
+// Usage: zerolog.Ctx(ctx).Info().Msg("order processed")
+```
+```go
+// ✅ Our approach: store values in context, handler reads them
+func Middleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        ctx := contextWithFields(r.Context(),
+            slog.String("trace_id", traceID),
+            slog.String("http.method", r.Method),
+        ) // values IN context, not a logger
+        next.ServeHTTP(w, r.WithContext(ctx))
+    })
+}
+// Usage: logger.InfoContext(ctx, "order processed")
+```
+````
+
+<v-clicks>
+
+- Logger in context = coupled to a specific lib (zerolog, logrus)
+- Values in context = any handler/lib can read them (slog, NR, custom)
+- **Performance** - context values are lightweight; a logger instance carries buffers, formatters, writers
+- **Hidden dependency** - `zerolog.Ctx(ctx)` hides a concrete logger behind context; hard to trace in code review
+- **Request-scoped** - values naturally match request lifecycle; a logger instance may carry state across boundaries
+
+</v-clicks>
+
+<!--
+Colocar o logger no context é o padrão mais comum, especialmente com zerolog.
+Mas acopla o código inteiro a uma lib específica.
+Valores no context são mais flexíveis - qualquer handler pode ler e usar.
 -->
 
 ---
