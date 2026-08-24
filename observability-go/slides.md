@@ -164,22 +164,25 @@ layout: two-cols
 
 # Automatic vs Manual Instrumentation
 
-**JIT/Interpreted Languages**
-(Java, Ruby, Node.js)
+**JIT/Interpreted Languages** (Java, Ruby, Node.js)
 
 - Runtime agents intercept calls
 - Automatic span creation
 - Low initial effort
-- Less control, more noise
+- **Less control, more noise**
 
 ::right::
+
+<div class="mt-22">
 
 **Go (Compiled)**
 
 - Explicit instrumentation in code
 - Developer decides span boundaries
 - Higher initial effort
-- Full control, clean signals
+- **Full control, clean signals**
+
+</div>
 
 <v-click>
 
@@ -315,8 +318,8 @@ Cada função que recebe ctx participa do trace automaticamente via New Relic.
 
 1. **Always accept `context.Context` as the first parameter**
 2. **Always propagate it downstream** - never discard
-3. **Never store context in structs** - it's request-scoped
 4. **Use `context.Background()` only at entry points** (main, init, tests)
+3. **Never store context in structs** - it's request-scoped
 
 </v-clicks>
 
@@ -382,10 +385,10 @@ slog é padrão desde Go 1.21. O tlog.Middleware injeta trace info no log record
 
 ---
 
-# How tlog Middleware Works
+# How log Middleware Works
 
-```go {all|4-5|7-8|10-15|all}
-// log middleware - extracts NR trace info and injects into slog context
+```go {all|4-5|7-8|10-16|17|all}
+// Extracts NR trace info (Added by APM Middleware) and injects into slog context
 func Middleware(cfg config.Config) func(next http.Handler) http.Handler {
     return func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -401,7 +404,6 @@ func Middleware(cfg config.Config) func(next http.Handler) http.Handler {
                 slog.String("http.method", r.Method),
                 slog.String("http.path", r.URL.Path),
             )
-
             next.ServeHTTP(w, r.WithContext(ctx))
         })
     }
@@ -426,7 +428,7 @@ O middleware injeta trace context UMA VEZ - todas as chamadas logger.*Context(ct
 
 # Custom slog Handler - Extracting Context
 
-```go {all|5-7|8-10|11-15|16-18|all}
+```go {all|1-4|5-7|8-10|11-15|16-18|all}
 type appLoggerHandler struct {
     slog.Handler
     fixedAttributes []slog.Attr
@@ -553,7 +555,9 @@ graph TD
 
 <v-click>
 
-One library. One `Initialize()` call. Every service starts from the same baseline.
+- One library. 
+- One `Initialize()` call. 
+- Every service starts from the same baseline.
 
 </v-click>
 
@@ -686,6 +690,8 @@ layout: section
 # Enriching Telemetry
 
 ---
+disabled: true
+---
 
 # Business Context in Traces
 
@@ -720,49 +726,10 @@ Query traces by **business dimensions** - school, user, device - not just HTTP s
 -->
 
 ---
-disabled: true
----
 
-# HTTP Client & Custom Metrics
+# Manual Instrumentation - DB & HTTP
 
-```go {all|1-5|7-9|11-13|all}
-// Instrumented HTTP client - auto child spans + trace propagation
-httpClient := tel.NewHttpClient(baseClient)
-resp, err := httpClient.Do(req)
-// ↑ Creates External segment in NR
-// ↑ Propagates distributed trace headers automatically
-
-// Custom business metrics
-tel.RecordMetric("Custom/CoursesLoaded", len(courses))
-tel.IncrementMetric("Custom/API/Schools/Requests")
-
-// Manual transactions for async workers (SQS consumers)
-ctx := tel.StartTransaction(ctx, "ProcessSQSMessage")
-defer tel.EndTransaction(ctx, "ProcessSQSMessage")
-```
-
-<v-click>
-
-Instrumented client = distributed tracing across boundaries. Manual transactions = visibility into async work.
-
-</v-click>
-
-<!--
-Sem o client instrumentado, chamadas entre serviços seriam invisíveis.
-Sem StartTransaction, SQS consumers não teriam traces.
-
-É como uma bolsa, alguém tem que saber colocar e também temos que saber retirar e propagar.
-
-Vamos precisar de funções helpers que vão remover o traces de nosso conrxto e formatar para as nossas ingrações, banco de dados, e http client por exemplo.
-
-listener são como controllers, a request seria a chegada de uma mensagem.
--->
-
----
-
-# Manual Instrumentation - DB, SQS & HTTP
-
-```go {all|1-6|8-13|15-19|all}
+```go {all|1-6|8-13|all}
 // Database - using nrpgx driver for automatic query tracing
 db, _ := sql.Open("nrpgx",
     "host=localhost port=5432 user=postgres dbname=postgres sslmode=disable",
@@ -777,11 +744,6 @@ client := &http.Client{
 req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 resp, _ := client.Do(req) // Creates External segment + propagates trace headers
 
-// SQS Consumer - manual transaction for async workers
-txn := app.StartTransaction("ProcessSQSMessage")
-ctx := newrelic.NewContext(context.Background(), txn)
-defer txn.End()
-// All downstream calls (DB, HTTP) within this ctx are traced
 ```
 
 <v-click>
@@ -796,6 +758,45 @@ defer txn.End()
 Cada integração tem seu wrapper NR: nrpgx para Postgres, NewRoundTripper para HTTP, StartTransaction para SQS.
 O padrão é sempre o mesmo: ctx com transação → segmento automático.
 -->
+
+---
+
+# Custom Metrics and Async Flows
+
+```go {all|1-5|7-13|all}
+// Custom business metrics - alert on what matters
+tel.RecordMetric("Custom/CoursesLoaded", float64(len(courses)))
+tel.IncrementMetric("Custom/API/Schools/Requests")
+// Use metrics for alerts, not logs!
+// "Error rate > 5% on school 42" is actionable. Grepping logs is not.
+
+// SQS Consumer - treat messages like HTTP requests
+func (w *Worker) ProcessMessage(msg *sqs.Message) {
+    // Start a transaction manually - this is the "entry point"
+    txn := nrApp.StartTransaction("SQS/ProcessPurchase")
+    defer txn.End()
+    ctx := newrelic.NewContext(context.Background(), txn)
+
+    // From here, all downstream calls (DB, HTTP) are traced
+    order, err := w.repo.GetOrder(ctx, msg.OrderID)
+    w.notifier.Send(ctx, order)
+}
+```
+
+<v-clicks>
+
+- **HTTP handlers** get transactions from middleware automatically
+- **Async workers** (SQS, Kafka, cron) need `StartTransaction` manually
+- Think of it as: the message arrival **is** the request
+
+</v-clicks>
+
+<!--
+Listeners são como controllers - a chegada de uma mensagem é como uma request HTTP.
+Sem StartTransaction, SQS consumers seriam invisíveis no tracing.
+Métricas são para alertas. Logs são o último recurso na investigação.
+-->
+
 
 ---
 layout: section
@@ -919,33 +920,28 @@ go-easy-instrumentation sugere mudanças no código fonte automaticamente (diff-
 
 ---
 
-# AI Agents & Observability - The Next Frontier
-
-Your instrumentation quality **directly impacts** how well AI agents can debug your systems.
+# AI Agents & Observability
 
 <v-clicks>
 
-- **Structured logs are machine-readable** - AI agents parse JSON logs effortlessly; `fmt.Println` is a dead end
-- **Trace correlation enables reasoning** - agents follow a trace_id across services to reconstruct the full story
-- **Consistent field names = better search** - `app_name`, `school_id`, `error` are queryable dimensions for AI tools
-- **Real experience**: New Relic AI agent accurately diagnosed production issues by navigating structured telemetry - because the data was clean and correlated
-- **The investment in the shared library pays double** - humans AND AI agents benefit from the same instrumentation quality
+- AI skills connected to your observability provider (New Relic, Datadog, etc.) can analyze logs, metrics, and traces automatically
+- But they only work well if your data is **structured and correlated**
+- `fmt.Println` is a dead end for any agent - structured JSON logs are machine-readable
+- Consistent field names (`app_name`, `school_id`, `trace_id`) make search and reasoning possible
+- The investment in good instrumentation pays double - humans AND AI agents benefit
 
 </v-clicks>
 
 <v-click>
 
-> The code you instrument today is the context AI agents will reason about tomorrow. Make it searchable, structured, and correlated.
+> Good instrumentation is like writing a good prompt - the clearer the context, the better the answer.
 
 </v-click>
 
 <!--
-Experiência real usando o AI agent do New Relic nos últimos dias.
-A qualidade da instrumentação - logs estruturados, trace correlation, campos consistentes - é o que permite que agentes de IA naveguem e diagnostiquem problemas automaticamente.
+Experiência real usando AI agent do New Relic.
+Basicamente é um prompt bem feito - se seus dados são limpos, o agente consegue navegar.
 Se seus logs são fmt.Println, nenhum agente vai te ajudar.
-O investimento em observabilidade bem feita paga dobrado: humanos debugam melhor E agentes de IA também.
-
-Basicamente é um prompt bem feito!
 -->
 
 ---
