@@ -463,55 +463,6 @@ O desenvolvedor só precisa passar ctx - o handler faz o resto.
 
 ---
 
-# Logger in Context vs Values in Context
-
-````md magic-move
-```go
-// ❌ Common pattern (zerolog, logrus): store logger instance in context
-func Middleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        logger := zerolog.Ctx(r.Context()).With().
-            Str("trace_id", traceID).
-            Str("http.method", r.Method).Logger()
-        ctx := logger.WithContext(r.Context()) // logger IN context
-        next.ServeHTTP(w, r.WithContext(ctx))
-    })
-}
-// Usage: zerolog.Ctx(ctx).Info().Msg("order processed")
-```
-```go
-// ✅ Our approach: store values in context, handler reads them
-func Middleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        ctx := contextWithFields(r.Context(),
-            slog.String("trace_id", traceID),
-            slog.String("http.method", r.Method),
-        ) // values IN context, not a logger
-        next.ServeHTTP(w, r.WithContext(ctx))
-    })
-}
-// Usage: logger.InfoContext(ctx, "order processed")
-```
-````
-
-<v-clicks>
-
-- Logger in context = coupled to a specific lib (zerolog, logrus)
-- Values in context = any handler/lib can read them (slog, NR, custom)
-- **Performance** - context values are lightweight; a logger instance carries buffers, formatters, writers
-- **Hidden dependency** - `zerolog.Ctx(ctx)` hides a concrete logger behind context; hard to trace in code review
-- **Request-scoped** - values naturally match request lifecycle; a logger instance may carry state across boundaries
-
-</v-clicks>
-
-<!--
-Colocar o logger no context é o padrão mais comum, especialmente com zerolog.
-Mas acopla o código inteiro a uma lib específica.
-Valores no context são mais flexíveis - qualquer handler pode ler e usar.
--->
-
----
-
 # Inside Initialize - Enforcing the Standard
 
 ```go {all|3-7|8|9-10|11|12-14|all}
@@ -577,6 +528,55 @@ O additionalLogHeaderData injeta contexto mobile - invaluável para debugging po
 -->
 
 ---
+
+# Logger in Context vs Values in Context
+
+````md magic-move
+```go
+// ❌ Common pattern (zerolog, logrus): store logger instance in context
+func Middleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        logger := zerolog.Ctx(r.Context()).With().
+            Str("trace_id", traceID).
+            Str("http.method", r.Method).Logger()
+        ctx := logger.WithContext(r.Context()) // logger IN context
+        next.ServeHTTP(w, r.WithContext(ctx))
+    })
+}
+// Usage: zerolog.Ctx(ctx).Info().Msg("order processed")
+```
+```go
+// ✅ Our approach: store values in context, handler reads them
+func Middleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        ctx := contextWithFields(r.Context(),
+            slog.String("trace_id", traceID),
+            slog.String("http.method", r.Method),
+        ) // values IN context, not a logger
+        next.ServeHTTP(w, r.WithContext(ctx))
+    })
+}
+// Usage: logger.InfoContext(ctx, "order processed")
+```
+````
+
+<v-clicks>
+
+- Logger in context = coupled to a specific lib (zerolog, logrus)
+- Values in context = any handler/lib can read them (slog, NR, custom)
+- **Performance** - context values are lightweight; a logger instance carries buffers, formatters, writers
+- **Hidden dependency** - `zerolog.Ctx(ctx)` hides a concrete logger behind context; hard to trace in code review
+- **Request-scoped** - values naturally match request lifecycle; a logger instance may carry state across boundaries
+
+</v-clicks>
+
+<!--
+Colocar o logger no context é o padrão mais comum, especialmente com zerolog.
+Mas acopla o código inteiro a uma lib específica.
+Valores no context são mais flexíveis - qualquer handler pode ler e usar.
+-->
+
+---
 layout: section
 ---
 
@@ -622,7 +622,7 @@ factoru de controllers
 
 # Bootstrapping Telemetry
 
-```go {all|1-5|7-12|16-20|all}
+```go {all|1-5|7-12|all}
 // cmd/api/main.go - mobile-service (Go 1.22+, http.ServeMux, slog)
 func main() {
     cfg := config.NewConfig()
@@ -661,74 +661,38 @@ Consistent instrumentation at the edge
 
 ---
 
-# Middleware Stack
+# HTTP Middleware - Where Instrumentation Lives
 
-```go {all|2|3-10|11-12|14-15|all}
-func getGlobalMiddlewares(cfg config.Configs, httpClient tel.HttpClient) []MiddlewareType {
-    nrMdd := tel.APMMiddleware              // starts NR transaction
-    logMdd := tlog.Middleware(              // structured request logging
-        tlog.WithRequestInfoLog(false),
-        tlog.WithAdditionalLogHeaderData(map[string]string{
-            "mobile.device_os":   "X-DEVICE-OS",
-            "mobile.device_id":   "X-DEVICE-ID",
-            "mobile.app_version": "X-APP-VERSION",
-        }),
+```go {all|3-5|9-10|all}
+func main() {
+    mux := http.NewServeMux()
+    // Public - no instrumentation needed
+    mux.HandleFunc("GET /__healthcheck__", controllers.Health)
+
+    // Protected - wrap with observability middlewares
+    handler := controllers.GetCourses(cfg, logger, httpClient)
+    mux.Handle("GET /api/v1/schools/{school_id}/courses",
+        tel.APMMiddleware(          // 1. starts NR transaction
+        tlog.Middleware(            // 2. structured logging + trace correlation
+        auth.Middleware(            // 3. authentication
+            handler,
+        ))),
     )
-    authMdd := auth.Middleware(httpClient, cfg)
-    sentryMdd := sentry.NewSentryMiddleware()
-
-    // Execution order: NR → Log → Sentry → Auth → Handler
-    return []MiddlewareType{newRelicExtraData, authMdd, logMdd, sentryMdd.Handle, nrMdd}
-}
-```
-
-<!--
-A ordem importa: APM middleware vem primeiro para que o transaction exista quando o log middleware executa.
-
-- Aplicações com ruby/java colocamos as libs e logamos tudo.
-- Tomar cuidado para não local healthches e info de forma desnecessária.
-- Para o casos de sucesso a métrica resolve o aleta!
-
--->
-
----
-
-# Route Registration - Go 1.22+
-
-```go {all|2-3|5-8|13-16|17|all}
-func (s *Server) HandlerRouters() http.Handler {
-    // Public - no middleware
-    s.Mux.HandleFunc("GET /__healthcheck__", controllers.Health)
-
-    // Protected - full middleware chain
-    s.registerRouter("GET /api/v1/schools/{school_id}/courses",
-        controllers.GetCourses(s.Cfg, s.logger, s.HttpClient, s.FFClient),
-    )
-}
-
-func (s *Server) registerRouter(pattern string, handler http.Handler) {
-    withMiddlewares := handler
-    // Provided by last function: getGlobalMiddlewares
-    for _, md := range s.Middlewares {
-        withMiddlewares = md(withMiddlewares)
-    }
-    s.Mux.Handle(pattern, withMiddlewares)
 }
 ```
 
 <v-clicks>
 
-- **Middleware chaining** - each middleware wraps the handler with additional behavior
-- **Decorator pattern** - `func(http.Handler) http.Handler` composed in sequence
-- **Fold/reduce** over the middleware slice - each iteration wraps the previous result
+- **Order matters** - APM first so the transaction exists when log middleware runs
+- Health checks stay outside - no need to trace or log them
+- Each middleware is just `func(http.Handler) http.Handler`
 
 </v-clicks>
 
 <!--
-Go 1.22+ trouxe method+path no ServeMux nativo. Não precisamos mais de gorilla/mux.
-
-- K8s health endpoint
-- getGlobalMiddlewares -> s.Middlewares
+A ordem importa: APM middleware vem primeiro para que o transaction exista quando o log middleware executa.
+Tomar cuidado para não instrumentar healthchecks e endpoints triviais.
+Para casos de sucesso a métrica resolve o alerta - não precisa logar tudo.
 -->
 
 ---
