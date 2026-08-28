@@ -18,12 +18,11 @@ drawings:
 # Architecting Observability in Go
 
 Context Propagation, Structured Logging, and Telemetry Strategy
-<!-- <div class="pt-12"> -->
+<div class="pt-2">
   <span class="opacity-60">
     Gilmar Alcantara - Hotmart
   </span>
-<!-- </div> -->
-
+</div>
 
 <img src="/bg-cover.png" class="gopher-bg" />
 
@@ -43,16 +42,13 @@ Em Go, essa decisão é ainda mais evidente porque nada acontece automaticamente
 
 - 🏢 Staff Engineer at **Hotmart**
 - 💼 *+10 years* of software engineering experience
-- 🐹 Go enthusiast - building microservices at scale
-- 🔭 Focused on **observability**, **platform engineering**, and **international regulations**
+- 🎓 Bachelor of Computer Engineering from **CEFET-MG**
 
 </div>
 <div>
 
-- 🎓 Bachelor of Computer Engineering from **CEFET-MG**
 - 🌎 Based in Brazil (Minas Gerais)
 - 👨‍👦 Father of **Benjamin** (9 years) and **Levi** (2 months)
-- 🎯 Passionate about making the right thing easy for engineering teams
 - 🌍 Now working with **international financial regulations** at Hotmart
 
 
@@ -129,10 +125,8 @@ Teachable está migrando do monolith Rails para microservices em Go - e a observ
 
 <v-clicks>
 
-- **Cost reduction was the primary driver** - free data quota on the New Relic contract eliminated all Datadog costs
 - **Tight deadline** - Datadog contract was expiring, no room for extended timelines
 - **Different runtimes, different instrumentation models** - auto-agent (Java, Ruby) vs manual (Go)
-- **No shared standards** - each service had its own logging format, trace setup
 - **Some Go services had zero instrumentation** in some cases - raw `fmt.Println`
 - **OpenTelemetry Collector adds too much DevOps effort** - deploying and maintaining a Collector infrastructure was not viable in the limited time window
 
@@ -166,10 +160,14 @@ layout: two-cols
 
 **JIT/Interpreted Languages** (Java, Ruby, Node.js)
 
+<v-clicks>
+
 - Runtime agents intercept calls
 - Automatic span creation
 - Low initial effort
 - **Less control, more noise**
+
+</v-clicks>
 
 ::right::
 
@@ -177,10 +175,14 @@ layout: two-cols
 
 **Go (Compiled)**
 
+<v-clicks>
+
 - Explicit instrumentation in code
 - Developer decides span boundaries
 - Higher initial effort
 - **Full control, clean signals**
+
+</v-clicks>
 
 </div>
 
@@ -224,20 +226,18 @@ graph LR
 
 <v-clicks>
 
-- **Traces** - show the path of a request across services and measure latency at each hop
 - **Logs** - provide detailed event records with business context at each step
 - **Metrics** - aggregate numerical data (request count, error rate, latency percentiles)
-- The **correlation key** is always the same: **Trace ID** propagated via `context.Context`
-- Without correlation, logs are isolated events and metrics are numbers without context
+- **Traces** - show the path of a request across services and measure latency at each hop
+- Without **correlation**, logs are isolated events and metrics are numbers without context
 
 </v-clicks>
 
 <!--
 O trace ID é o que conecta tudo. Sem ele, logs são eventos isolados e métricas são números sem contexto.
-
-- Metricas devem ser usadas para alertas, não logs
 - Logs devem ser os ultimos analizados em um incidente, 
 - O  objeto é encontrar o log!
+Exemplo de custo relacionado ao envio de metricas e logs
 -->
 
 ---
@@ -427,11 +427,7 @@ Não exquecer que esse contexto que estamos enriquecendo é enviado nas chamadas
 
 # Custom slog Handler - Extracting Context
 
-```go {all|1-4|5-7|8-10|11-15|16-18|all}
-type appLoggerHandler struct {
-    slog.Handler
-    fixedAttributes []slog.Attr
-}
+```go {all|7-11}
 func NewHandler(handler slog.Handler, attrs ...slog.Attr) *appLoggerHandler {
     return &appLoggerHandler{handler, attrs}
 }
@@ -448,13 +444,13 @@ func (h appLoggerHandler) Handle(ctx context.Context, r slog.Record) error {
 }
 ```
 
-<v-click>
+<v-clicks>
 
-<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
-💡 The custom handler bridges context and slog - every <code>logger.InfoContext(ctx, ...)</code> call automatically includes trace_id, span_id, and all enriched fields without the caller needing to pass them explicitly.
-</div>
+- The custom handler bridges `context` and `slog`
+- Every `logger.InfoContext(ctx, ...)` call automatically includes `trace_id`, `span_id`, and all enriched fields
+- The caller doesn't need to pass them explicitly - the handler does the rest
 
-</v-click>
+</v-clicks>
 
 <!--
 Esse é o "truque" da nossa lib: um handler customizado que pega tudo do context e injeta no record.
@@ -483,18 +479,21 @@ func Setup(cfg config.Config) (*slog.Logger, error) {
 }
 ```
 
-<v-clicks>
+<v-click>
 
-- **Fixed attributes** → every log has `app_name`, `env`, `pod_name` automatically
-- **`NewHandler`** → wraps inner handler with our custom `appLoggerHandler`
-- **`slog.SetDefault`** → even third-party libs follow the same standard
+<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 Call <code>Setup()</code> once in <code>main</code>, add the middleware to your routes - that's all it takes for the magic to happen.
+</div>
 
-</v-clicks>
+</v-click>
 
 <!--
 Esse é o coração do padrão: a inicialização garante que NENHUM log sai sem app_name, env, pod_name.
 slog.SetDefault faz com que até código de terceiros (libs) use o mesmo handler.
 nrslog.JSONHandler injeta trace_id/span_id automaticamente quando NR agent está ativo.
+- **Fixed attributes** → every log has `app_name`, `env`, `pod_name` automatically
+- **`NewHandler`** → wraps inner handler with our custom `appLoggerHandler`
+- **`slog.SetDefault`** → even third-party libs follow the same standard
 -->
 
 ---
@@ -680,19 +679,10 @@ func main() {
     )
 }
 ```
-
-<v-clicks>
-
+<!--
 - **Order matters** - APM first so the transaction exists when log middleware runs
 - Health checks stay outside - no need to trace or log them
 - Each middleware is just `func(http.Handler) http.Handler`
-
-</v-clicks>
-
-<!--
-A ordem importa: APM middleware vem primeiro para que o transaction exista quando o log middleware executa.
-Tomar cuidado para não instrumentar healthchecks e endpoints triviais.
-Para casos de sucesso a métrica resolve o alerta - não precisa logar tudo.
 -->
 
 ---
@@ -727,14 +717,8 @@ func newRelicExtraDataMiddleware(next http.Handler) http.Handler {
 }
 ```
 
-<v-click>
-
-Query traces by **business dimensions** - school, user, device - not just HTTP status codes.
-
-</v-click>
-
 <!--
-"Mostra requests do school 42 com app version < 3.0" - agora é possível.
+Query traces by **business dimensions** - school, user, device - not just HTTP status codes.
 -->
 
 ---
@@ -779,7 +763,6 @@ O padrão é sempre o mesmo: ctx com transação → segmento automático.
 // Custom business metrics - alert on what matters
 tel.RecordMetric("Custom/CoursesLoaded", float64(len(courses)))
 tel.IncrementMetric("Custom/API/Schools/Requests")
-// Use metrics for alerts, not logs!
 // "Error rate > 5% on school 42" is actionable. Grepping logs is not.
 
 // SQS Consumer - treat messages like HTTP requests
@@ -797,16 +780,18 @@ func (w *Worker) ProcessMessage(msg *sqs.Message) {
 
 <v-clicks>
 
-- **HTTP handlers** get transactions from middleware automatically
-- **Async workers** (SQS, Kafka, cron) need `StartTransaction` manually
-- Think of it as: the message arrival **is** the request
+<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 <b>Use metrics for alerts, not logs!</b><br>
+<b>HTTP handlers</b> get transactions from middleware automatically <br/>
+<b>Async workers</b> (SQS, Kafka, cron) need `StartTransaction` manually
+</div>
+
+
 
 </v-clicks>
 
 <!--
-Listeners são como controllers - a chegada de uma mensagem é como uma request HTTP.
-Sem StartTransaction, SQS consumers seriam invisíveis no tracing.
-Métricas são para alertas. Logs são o último recurso na investigação.
+Examplo dos alertas baseados em logs e não em metricas
 -->
 
 
@@ -872,35 +857,11 @@ O trace completo aparece no New Relic - Go, Ruby, externo - tudo conectado.
 layout: section
 ---
 
-# Governance & Sustainability
+# The Future
 
 ---
 
-# The Instrumentation Contract
-
-<v-clicks>
-
-- **Every HTTP server** → `tel.APMMiddleware` + `tlog.Middleware`
-- **Every HTTP client** → `tel.NewHttpClient()` for auto span propagation
-- **Every log line** → `logger.*Context(ctx, ...)` - never `fmt.Println`
-- **Every service** → `tel.Initialize(...)` at startup
-- **Always pass `context.Context`** explicitly - especially to external calls
-
-</v-clicks>
-
-<v-click>
-
-> Any engineer can look at any service's telemetry and **immediately understand it** - same structure, same semantics.
-
-</v-click>
-
-<!--
-Padronização é o que transforma observabilidade de ferramenta em plataforma.
--->
-
----
-
-# Next Steps - The Future
+# Next Steps 
 
 <v-clicks>
 
@@ -932,13 +893,12 @@ go-easy-instrumentation sugere mudanças no código fonte automaticamente (diff-
 
 ---
 
-# AI Agents & Observability
+# AI Agents & Observability(NOW)
 
 <v-clicks>
 
 - AI skills connected to your observability provider (New Relic, Datadog, etc.) can analyze logs, metrics, and traces automatically
 - But they only work well if your data is **structured and correlated**
-- `fmt.Println` is a dead end for any agent - structured JSON logs are machine-readable
 - Consistent field names (`app_name`, `school_id`, `trace_id`) make search and reasoning possible
 - The investment in good instrumentation pays double - humans AND AI agents benefit
 
@@ -1004,36 +964,18 @@ Go te força a ser explícito - e isso é uma vantagem.
 -->
 
 ---
-layout: center
+layout: end
 class: text-center
 ---
 
 # Thank You
 
-Observability in Go is engineering - explicit, intentional, and architecturally sound.
-
-<div class="text-sm opacity-60 mt-4">
-  Gilmar Alcantara - Hotmart
-</div>
-
-<!--
-Observabilidade não é sobre ferramentas - é sobre decisões de design.
-- explicito
-- intencianak
-- arquitetonicamente sólido
--->
-
----
-layout: end
-disabled: true
----
-
-<div class="absolute top-10 left-0 right-0 text-center z-20">
-  <h1 class="text-4xl font-bold text-white">Thank You</h1>
-  <p class="text-base opacity-80 mt-3">Observability in Go is engineering - explicit, intentional, and architecturally sound.</p>
-  <p class="text-sm opacity-60 mt-2">Gilmar Alcantara - Hotmart</p>
+<div class="center mt-4">
+Observability in Go is engineering <br/>
+Explicit, intentional, and architecturally sound.
 </div>
 
 <!--
 GopherCon LATAM 2026
+Observabilidade não é sobre ferramentas - é sobre decisões de design.
 -->

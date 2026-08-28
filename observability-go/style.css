@@ -85,20 +85,20 @@
   z-index: 10;
 }
 
-/* GopherCon logo at bottom -- Remove for while*/
-/* .slidev-layout.cover::after,
+/* GopherCon logo at bottom*/
+.slidev-layout.cover::after,
 .slidev-layout.intro::after {
   content: '';
   position: absolute;
-  bottom: 1.5rem;
+  bottom: 1rem!important;
   left: 3rem;
-  width: 220px;
-  height: 18px;
+  width: 420px;
+  height: 28px;
   background-image: url('/gophercon-logo.png'); 
   background-size: contain;
   background-repeat: no-repeat;
   z-index: 10;
-} */
+} 
 
 /* Ensure text is above the image */
 .slidev-layout.cover > *,
@@ -180,9 +180,27 @@
 .slidev-layout.end {
   background-image: url('/gophercon-closing.png');
   background-size: 100% auto;
-  background-position: center bottom 2rem;
+  background-position: center bottom !important;
   background-repeat: no-repeat;
-  background-color: var(--gc-purple);
+  background-color: var(--gc-charcoal-dark);
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  padding-top: 4rem !important;
+}
+
+.slidev-layout.end > * {
+  position: relative;
+  z-index: 1;
+  margin-top: 1 !important;
+  margin-bottom: 1 !important;
+}
+
+.slidev-layout.end .slidev-layout-center,
+.slidev-layout.end .my-auto {
+  margin-top: 1 !important;
+  margin-bottom: auto !important;
 }
 
 .slidev-layout.end h1,
