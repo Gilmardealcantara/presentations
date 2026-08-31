@@ -7,6 +7,8 @@ info: |
   GopherCon LATAM 2026
 colorSchema: dark
 lineNumbers: true
+duration: 40min
+timer: stopwatch
 fonts:
   sans: Inter
   mono: Fira Code
@@ -27,8 +29,8 @@ Context Propagation, Structured Logging, and Telemetry Strategy
 <img src="/bg-cover.png" class="gopher-bg" />
 
 <!--
-Observabilidade não é um checkbox de ferramenta - é uma decisão de arquitetura.
-Em Go, essa decisão é ainda mais evidente porque nada acontece automaticamente.
+- Personal challenge
+- to reach more people.
 -->
 
 ---
@@ -40,8 +42,8 @@ Em Go, essa decisão é ainda mais evidente porque nada acontece automaticamente
 
 **Gilmar Alcantara**
 
-- 🏢 Staff Engineer at **Hotmart**
 - 💼 *+10 years* of software engineering experience
+- 🏢 Staff Engineer at **Hotmart**
 - 🎓 Bachelor of Computer Engineering from **CEFET-MG**
 
 </div>
@@ -58,8 +60,7 @@ Em Go, essa decisão é ainda mais evidente porque nada acontece automaticamente
 <img src="/sons.png" class="sons-photo" />
 
 <!--
-Me apresentando brevemente antes de entrar no conteúdo técnico.
-Formado pelo CEFET-MG, passei por varias outras empresas como a IBM, e hoje atuo no time financeiro da Hotmart com regulamentações internacionais.
+- graduated
 -->
 
 ---
@@ -80,8 +81,7 @@ Based on a **real-world experience** leading an observability migration at **Hot
 </v-clicks>
 
 <!--
-Essa palestra vem de experiência real. Liderei a frente de instrumentação Go na migração de Datadog para New Relic.
-Não é sobre comparar ferramentas - é sobre as decisões arquiteturais que fizemos e por quê.
+-
 -->
 
 ---
@@ -115,8 +115,7 @@ graph TD
 </v-clicks>
 
 <!--
-Hotmart comprou Teachable em 2021. Duas plataformas, stacks diferentes.
-Teachable está migrando do monolith Rails para microservices em Go - e a observabilidade precisa cobrir tudo.
+-
 -->
 
 ---
@@ -125,25 +124,99 @@ Teachable está migrando do monolith Rails para microservices em Go - e a observ
 
 <v-clicks>
 
-- **Tight deadline** - Datadog contract was expiring, no room for extended timelines
-- **Different runtimes, different instrumentation models** - auto-agent (Java, Ruby) vs manual (Go)
-- **Some Go services had zero instrumentation** in some cases - raw `fmt.Println`
-- **OpenTelemetry Collector adds too much DevOps effort** - deploying and maintaining a Collector infrastructure was not viable in the limited time window
+- **Tight deadline** 
+    - the Datadog contract was expiring. We had weeks, not months
+- **Different runtimes, different models**
+    - auto-agent Ruby vs manual (Go)
+- **No standard for instrumentation across Go services** 
+    - different HTTP handlers, different logging libraries
 
 </v-clicks>
 
 <v-click>
 
-> The deadline pressure is also why we didn't migrate to OpenTelemetry directly - vendor SDK was the fastest path to production with quality.
+> The deadline is also why we didn't go straight to OpenTelemetry. The vendor SDK was the fastest path to production with quality - and the New Relic team supported us directly along the way. OTel is the strategic direction - just not under this deadline.
 
 </v-click>
 
 <!--
-O driver principal foi custo: free data quota no contrato NR eliminou todo custo com DD.
-Mas o prazo apertado do contrato DD expirando nos forçou a ser pragmáticos - OTel direto era risco demais.
+- To be pragmatic.
+- Keep this simple
+-->
 
-- Fluentd, para to get logs from pods and send to K8s
-- Posteriormente também é sabido que poderimos optar por usar os coletores dos parceiros...
+---
+layout: section
+---
+
+# The Problem We're Solving
+
+Logs, metrics, and traces - and why they're useless apart
+
+---
+
+# The Three Pillars
+
+<v-clicks>
+
+- **Logs** - what happened
+    - Detailed event records with business context at each step
+- **Metrics** - how much, how often
+    - Aggregated numbers: request count, error rate, latency percentiles
+- **Traces** - where the time went
+    - The path of a request across services, with latency at each hop
+
+</v-clicks>
+
+<v-clicks>
+<div class="mt-8 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 Cost: Logs vs Metrics
+</div>
+<div class="mt-8 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 Three views of the same request - but isolated.
+</div>
+</v-clicks>
+
+<!--
+-- Examples to base alerts on Metrics instead of Logs
+-- Logs sampling
+-- Cost Logs vs Metrics
+-->
+
+---
+
+# The Real Problem: Correlation
+
+<v-clicks>
+
+- You have an **error** in your logs.
+- You have a **latency spike** in your metrics.
+- You have a **slow span** in your traces.
+
+</v-clicks>
+
+
+<v-click>
+
+<div class="mt-6 text-2xl font-bold">
+How do you know they belong to the <span class="text-blue-400">same request</span>?
+</div>
+
+</v-click>
+
+<v-click>
+<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 The <strong>trace_id</strong> is the thread that <strong>connects</strong> the three pillars
+</div>
+</v-click>
+
+<v-click>
+<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 Jump from a metric alert → the trace → the exact log line.
+</div>
+</v-click>
+
+<!--
+- Last thing – Logs
 -->
 
 ---
@@ -194,77 +267,19 @@ layout: two-cols
 
 </v-click>
 
-<!--
-Na migração, os serviços Java e Ruby foram "fáceis" - instala o agent e pronto.
-Go exigiu design. Mas o resultado é mais limpo e controlável.
-
-Reflection and 
-Java aspects!
-
-Podemos instrumentar caminihos críticos da aplicação e evitar caminhos simples como health checks
-Momento do produto
-Time mais/menos senior...
-
--->
-
----
-
-# How the Three Pillars Connect
-
-```mermaid
-graph LR
-  A[Request] --> B[HTTP Middleware]
-  B --> C[context.Context]
-  C --> D[Traces / Spans]
-  C --> E[Structured Logs]
-  C --> F[Metrics]
-  D --> G[Trace ID]
-  E --> G
-  F --> G
-  G --> H[Correlated Telemetry]
-```
-
-<v-clicks>
-
-- **Logs** - provide detailed event records with business context at each step
-- **Metrics** - aggregate numerical data (request count, error rate, latency percentiles)
-- **Traces** - show the path of a request across services and measure latency at each hop
-- Without **correlation**, logs are isolated events and metrics are numbers without context
-
-</v-clicks>
-
-<!--
-O trace ID é o que conecta tudo. Sem ele, logs são eventos isolados e métricas são números sem contexto.
-- Logs devem ser os ultimos analizados em um incidente, 
-- O  objeto é encontrar o log!
-Exemplo de custo relacionado ao envio de metricas e logs
--->
-
----
-disabled: true
----
-
-# Why Not OpenTelemetry (Yet)?
-
-<v-clicks>
-
-- **Tight deadline** - DD contract expiring, no time for OTel Collector infrastructure setup
-- OTel Collector requires **dedicated infrastructure** - CPU, memory, networking, operational expertise
-- Adds a **new failure point** in the telemetry pipeline
-- New Relic Go agent = **proven, fast to implement**, already covered by the new contract
-- OTel is the strategic direction - but **not under deadline pressure**
-
-</v-clicks>
-
 <v-click>
 
-> Pragmatism over idealism: vendor SDK now, abstraction layer for OTel later. Ship fast, migrate cleanly.
+<div class="ctx-banner">
+In Go, <code>context.Context</code> carries the <strong>trace_id</strong> that correlates the pillars.
+</div>
 
 </v-click>
 
 <!--
-Com o contrato DD vencendo, não tínhamos tempo pra montar infra de Collector.
-NR agent era o caminho mais rápido pra produção com qualidade. OTel fica pro futuro.
+- Reflection 
+- Java aspects!
+- Teams Seniority
+- The conclusion of this slide: Go is explicit, so context.Context is THE mechanism for correlation.
 -->
 
 ---
@@ -279,12 +294,11 @@ The backbone of distributed tracing in Go
 
 # context.Context: The Propagation Vehicle
 
-```go {all|3-4|6-7|9-12|all}
+```go {all|3-4|6|8-11|all}
 // mobile-service - handler with context propagation
 func GetCourses(cfg config.Configs, logger log.Loggable, client tel.HttpClient) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
         ctx := r.Context()
-
         schoolID := r.PathValue("school_id")
         courses, err := fetchCourses(ctx, client, cfg, schoolID)
         if err != nil {
@@ -295,19 +309,24 @@ func GetCourses(cfg config.Configs, logger log.Loggable, client tel.HttpClient) 
             http.Error(w, "internal error", http.StatusInternalServerError)
             return
         }
-
         writeJSON(w, courses)
     }
 }
 ```
 
+<v-click>
+
+<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 <code>context.Context</code> is an <strong>immutable tree</strong>: each <code>WithValue</code> / <code>WithCancel</code> returns a new child node wrapping its parent - never mutated, only derived.
+</div>
+
+</v-click>
+
 <!--
-O context carrega trace info, deadlines, e cancellation - tudo junto.
-Cada função que recebe ctx participa do trace automaticamente via New Relic.
+- What is context!
+- Layer Architecture
 
-- Injeção de dependência.
-- closures
-
+ context.Context is Go's standard type for carrying request-scoped values, deadlines, and cancellation across API boundaries - passed as the first argument, from the entry point all the way down.
 -->
 
 ---
@@ -316,10 +335,10 @@ Cada função que recebe ctx participa do trace automaticamente via New Relic.
 
 <v-clicks>
 
-1. **Always accept `context.Context` as the first parameter**
-2. **Always propagate it downstream** - never discard
-4. **Use `context.Background()` only at entry points** (main, init, tests)
-3. **Never store context in structs** - it's request-scoped
+1. **Use `context.Background()` only at entry points** (main, init, tests)
+2. **Always accept `context.Context` as the first parameter**
+3. **Always propagate it downstream** - never discard
+4. **Never store context in structs** - it's request-scoped
 
 </v-clicks>
 
@@ -338,7 +357,8 @@ type Repo struct {
 </v-click>
 
 <!--
-Contexto em struct é um anti-pattern clássico. Ele é request-scoped - armazená-lo quebra traces.
+- 2 Example about beginners in the Language that ignores Context Lib and need to refact later.
+-  With Context prefix Libs
 -->
 
 ---
@@ -353,34 +373,94 @@ layout: section
 
 ````md magic-move
 ```go
-// ❌ Unstructured - impossible to query or correlate
+// ❌ Unstructured
 log.Printf("order %s processed for user %s", orderID, userID)
+
+// Output: plain text - can't query or correlate
+// order 1234 processed for user 42
 ```
 ```go
-// ⚠️ Structured but no trace correlation
+// ⚠️ Structured, but no trace correlation (json handler!)
 slog.Info("order processed",
     "order_id", orderID,
     "user_id", userID,
 )
+
+// Output: JSON - queryable, but an isolated event
+// {
+//   "level": "INFO",
+//   "msg": "order processed",
+//   "order_id": "1234",
+//   "user_id": "42"
+// }
 ```
 ```go
 // ✅ Structured + trace-correlated via context
-logger.InfoContext(ctx, "order processed",
+slog.InfoContext(ctx, "order processed",
     "order_id", orderID,
     "user_id", userID,
 )
-// trace_id and span_id injected automatically by the log middleware
+
+// Output: JSON + trace - now correlated
+// {
+//   "level": "INFO",
+//   "msg": "order processed",
+//   "order_id": "1234",
+//   "user_id": "42",
+//   "trace_id": "4bf92f3577b34da6...",
+//   "span_id": "00f067aa0ba902b7"
+// }
 ```
 ````
 
 <v-click>
 
-The log middleware injects `trace_id` and `span_id` from New Relic - **zero effort at call sites**.
+<div class="mt-2 p-2 bg-blue-50 rounded dark:bg-blue-900 text-sm">
+💡 <code>trace_id</code> and <code>span_id</code> are injected automatically by the log middleware - <strong>zero effort at call sites</strong>.
+</div>
 
 </v-click>
 
 <!--
-slog é padrão desde Go 1.21. O tlog.Middleware injeta trace info no log record automaticamente.
+slog is standard since Go 1.2
+-->
+
+---
+
+# Wiring It Up - Where the Middleware Lives
+
+The **setup** is simple: wrap your routes. We'll see how it works next.
+
+```go {all|3-5|9-13|all}
+func main() {
+    mux := http.NewServeMux()
+    // Public - no instrumentation needed
+    mux.HandleFunc("GET /__healthcheck__", controllers.Health)
+
+    // Protected - wrap with observability middlewares
+    handler := controllers.GetCourses(cfg, logger, httpClient)
+    mux.Handle("GET /api/v1/schools/{school_id}/courses",
+        tel.APMMiddleware(          // 1. starts NR transaction
+        tlog.Middleware(            // 2. structured logging + trace correlation
+        auth.Middleware(            // 3. authentication
+            handler,
+        ))),
+    )
+}
+```
+
+<v-click>
+
+<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 <strong>Order matters</strong> - APM first, so the transaction exists in context when the log middleware reads it. Health checks stay outside: no need to trace or log them.
+</div>
+
+</v-click>
+
+<!--
+- http mux since: Go 1.22
+- Middleware Order matters
+- Manual and intencional instrumentation
 -->
 
 ---
@@ -418,14 +498,50 @@ func Middleware(cfg config.Config) func(next http.Handler) http.Handler {
 </v-click>
 
 <!--
-O middleware injeta trace context UMA VEZ - todas as chamadas logger.*Context(ctx, ...) herdam isso.
-Quem coloca o trace no context é o APM Middleware (New Relic). Esse middleware apenas lê e enriquece o slog.
-Não exquecer que esse contexto que estamos enriquecendo é enviado nas chamadas do slog.
+-
+-->
+
+---
+
+# Inside Initialize - Enforcing the Standard
+
+The **setup**: one call in `main` wires the logger. Next we'll see the handler that does the work.
+
+```go {all|3-7|8|9-10|11|12-14|all}
+func Setup(cfg config.Config) (*slog.Logger, error) {
+    // ...
+    fixedAttributes := []slog.Attr{
+        slog.String("app_name", cfg.ServiceName),
+        slog.String("app_version", cfg.Version),
+        slog.String("env", cfg.AppEnv),
+    }
+    var appHandler *appLoggerHandler
+    // NR agent available → JSON + trace correlation
+    nrHandler := nrslog.JSONHandler(telemetry.App, cfg.LogOutput, &options)
+    appHandler = NewHandler(nrHandler, fixedAttributes...)
+    logger := slog.New(appHandler)
+    slog.SetDefault(logger) // Third-party code also gets the standard
+    return logger, nil
+}
+```
+
+<v-click>
+
+<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 Call <code>Setup()</code> once in <code>main</code> - every log now carries <code>app_name</code>, <code>env</code>, and trace correlation.
+</div>
+
+</v-click>
+
+<!--
+-
 -->
 
 ---
 
 # Custom slog Handler - Extracting Context
+
+And here's the **implementation** - the `NewHandler` from `Setup` above.
 
 ```go {all|7-11}
 func NewHandler(handler slog.Handler, attrs ...slog.Attr) *appLoggerHandler {
@@ -453,47 +569,7 @@ func (h appLoggerHandler) Handle(ctx context.Context, r slog.Record) error {
 </v-clicks>
 
 <!--
-Esse é o "truque" da nossa lib: um handler customizado que pega tudo do context e injeta no record.
-O desenvolvedor só precisa passar ctx - o handler faz o resto.
--->
-
----
-
-# Inside Initialize - Enforcing the Standard
-
-```go {all|3-7|8|9-10|11|12-14|all}
-func Setup(cfg config.Config) (*slog.Logger, error) {
-    // ...
-    fixedAttributes := []slog.Attr{
-        slog.String("app_name", cfg.ServiceName),
-        slog.String("app_version", cfg.Version),
-        slog.String("env", cfg.AppEnv),
-    }
-    var appHandler *appLoggerHandler
-    // NR agent available → JSON + trace correlation
-    nrHandler := nrslog.JSONHandler(telemetry.App, cfg.LogOutput, &options)
-    appHandler = NewHandler(nrHandler, fixedAttributes...)
-    logger := slog.New(appHandler)
-    slog.SetDefault(logger) // Third-party code also gets the standard
-    return logger, nil
-}
-```
-
-<v-click>
-
-<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
-💡 Call <code>Setup()</code> once in <code>main</code>, add the middleware to your routes - that's all it takes for the magic to happen.
-</div>
-
-</v-click>
-
-<!--
-Esse é o coração do padrão: a inicialização garante que NENHUM log sai sem app_name, env, pod_name.
-slog.SetDefault faz com que até código de terceiros (libs) use o mesmo handler.
-nrslog.JSONHandler injeta trace_id/span_id automaticamente quando NR agent está ativo.
-- **Fixed attributes** → every log has `app_name`, `env`, `pod_name` automatically
-- **`NewHandler`** → wraps inner handler with our custom `appLoggerHandler`
-- **`slog.SetDefault`** → even third-party libs follow the same standard
+-
 -->
 
 ---
@@ -523,166 +599,162 @@ nrslog.JSONHandler injeta trace_id/span_id automaticamente quando NR agent está
 </v-click>
 
 <!--
-O additionalLogHeaderData injeta contexto mobile - invaluável para debugging por device.
+The additionalLogHeaderData injects mobile context - invaluable for debugging by device.
 -->
 
 ---
 
 # Logger in Context vs Values in Context
 
-````md magic-move
+<div class="grid grid-cols-2 gap-4 text-sm">
+<div>
+
+**❌ Logger in context** (zerolog, logrus)
+
 ```go
-// ❌ Common pattern (zerolog, logrus): store logger instance in context
 func Middleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        logger := zerolog.Ctx(r.Context()).With().
-            Str("trace_id", traceID).
-            Str("http.method", r.Method).Logger()
-        ctx := logger.WithContext(r.Context()) // logger IN context
-        next.ServeHTTP(w, r.WithContext(ctx))
-    })
+  return http.HandlerFunc(func(w, r) {
+    logger := zerolog.Ctx(r.Context()).With().
+      Str("trace_id", traceID).
+      Str("http.method", r.Method).Logger()
+    ctx := logger.WithContext(r.Context())
+    next.ServeHTTP(w, r.WithContext(ctx))
+  })
 }
-// Usage: zerolog.Ctx(ctx).Info().Msg("order processed")
+// zerolog.Ctx(ctx).Info().Msg("...")
 ```
+
+</div>
+<div>
+
+**✅ Values in context** (our approach)
+
 ```go
-// ✅ Our approach: store values in context, handler reads them
 func Middleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        ctx := contextWithFields(r.Context(),
-            slog.String("trace_id", traceID),
-            slog.String("http.method", r.Method),
-        ) // values IN context, not a logger
-        next.ServeHTTP(w, r.WithContext(ctx))
-    })
+  return http.HandlerFunc(func(w, r) {
+    ctx := contextWithFields(r.Context(),
+      slog.String("trace_id", traceID),
+      slog.String("http.method", r.Method),
+    )
+    next.ServeHTTP(w, r.WithContext(ctx))
+  })
 }
-// Usage: logger.InfoContext(ctx, "order processed")
+// logger.InfoContext(ctx, "...")
 ```
-````
+
+</div>
+</div>
 
 <v-clicks>
 
-- Logger in context = coupled to a specific lib (zerolog, logrus)
-- Values in context = any handler/lib can read them (slog, NR, custom)
-- **Performance** - context values are lightweight; a logger instance carries buffers, formatters, writers
-- **Hidden dependency** - `zerolog.Ctx(ctx)` hides a concrete logger behind context; hard to trace in code review
-- **Request-scoped** - values naturally match request lifecycle; a logger instance may carry state across boundaries
+- Logger in context → **coupled** to one lib
+- Values in context → **any** handler can read them
+- Lighter, no hidden dependency, naturally request-scoped
 
 </v-clicks>
 
 <!--
-Colocar o logger no context é o padrão mais comum, especialmente com zerolog.
-Mas acopla o código inteiro a uma lib específica.
-Valores no context são mais flexíveis - qualquer handler pode ler e usar.
+- Bottom line: store the data, let the handler decide how to log it.
+- common pattern
+- couples the entire codebase to a specific lib 
+- swap the logger and every call site changes.
+
+Why values-in-context wins, in detail:
+- Portability: values (trace_id, method, path) can be read by slog, New Relic, or any custom handler. The logger isn't the contract; the data is.
+- Performance: a context value is just a key/value pair. A logger instance carries buffers, formatters, and writers - heavier to stash and copy per request.
+- Hidden dependency: zerolog.Ctx(ctx) pulls a concrete logger out of context - invisible in code review, and a compile-time coupling disguised as a runtime lookup.
+- Request-scoped: plain values match the request lifecycle cleanly; a logger instance can accidentally carry state across boundaries.
+
 -->
 
 ---
-layout: section
----
 
-# The Shared Telemetry Library
+# OpenTelemetry Solves This the Same Way
 
-Centralizing observability for Go microservices
+The pattern we built is not vendor-specific - it's how **OTel** works too.
 
----
+<div class="grid grid-cols-2 gap-6 mt-6">
+<div>
 
-# Architecture: Shared Telemetry Library
+**Our approach (vendor SDK)**
 
-```mermaid
-graph TD
-  A[Shared Observability Lib] --> B[APM / Tracing]
-  A --> C[Structured Logging]
-  A --> D[Gin Middleware]
-  A --> E[Zap Adapter]
-  B --> F[New Relic APM]
-  B --> G[HTTP Client Instrumentation]
-  B --> H[Metrics]
-  C --> I[slog + Trace Correlation]
-  D --> J[Gin Middleware]
-```
+<v-clicks>
+
+- `context.Context` carries trace info
+- Middleware injects `trace_id` / `span_id`
+- W3C trace headers propagate across services
+- Custom slog handler reads from context
+
+</v-clicks>
+
+</div>
+<div>
+
+**OpenTelemetry**
+
+<v-clicks>
+
+- `context.Context` carries the `SpanContext`
+- `otel.Tracer` + propagators inject IDs
+- W3C Trace Context is the **default** standard
+- `otelslog` bridge reads from context
+
+</v-clicks>
+
+</div>
+</div>
 
 <v-click>
 
-- One library. 
-- One `Initialize()` call. 
-- Every service starts from the same baseline.
+<div class="mt-6 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 Same mechanism, same standard headers. We validated the design against OTel - so moving to it later is a swap, not a redesign.
+</div>
 
 </v-click>
 
 <!--
-A lib nasceu dessa migração. Em vez de cada serviço fazer sua instrumentação, centralizamos tudo.
+Key message: this is not a vendor trick. Context propagation + W3C Trace Context is exactly how OTel does it.
 
-- Arquitetura de referencia: http mux (go 1.21) e slog
-- Suport a  gin e zap....
-
-factoru de controllers
--->
-
----
-
-# Bootstrapping Telemetry
-
-```go {all|1-5|7-12|all}
-// cmd/api/main.go - mobile-service (Go 1.22+, http.ServeMux, slog)
-func main() {
-    cfg := config.NewConfig()
-    ctx := context.Background()
-
-    // One call: configures New Relic + slog + trace correlation
-    logInstance, err := tel.Initialize(
-        tel.WithServiceName(cfg.AppName),
-        tel.WithLogLevel(cfg.LogLevel),
-        tel.WithEnv(cfg.AppEnv),
-        tel.WithVersion(cfg.DevopsCommit),
-    )
-    if err != nil {
-        panic(err)
-    }
-
-    logger := log.New(logInstance)
-    nrApp := tel.NRApp
-    defer nrApp.Shutdown(8 * time.Second)
-    // ... db, feature flags, http client, server setup
-}
-```
-
-<!--
-Uma única chamada configura New Relic + slog + trace correlation.
-Functional options permitem flexibilidade sem quebrar a interface.
+We didn't use OTel because of the deadline - but our architecture mirrors it, so migrating later is low-risk.
 -->
 
 ---
 layout: section
+disabled: true
 ---
 
-# HTTP Middleware Patterns
+# The Shared Telemetry Library
 
-Consistent instrumentation at the edge
+Packaging the pattern so teams don't reinvent it
 
 ---
+disabled: true
+---
 
-# HTTP Middleware - Where Instrumentation Lives
+# We Packaged It Into a Shared Library
 
-```go {all|3-5|9-10|all}
-func main() {
-    mux := http.NewServeMux()
-    // Public - no instrumentation needed
-    mux.HandleFunc("GET /__healthcheck__", controllers.Health)
+So every Go service gets correlation for free.
 
-    // Protected - wrap with observability middlewares
-    handler := controllers.GetCourses(cfg, logger, httpClient)
-    mux.Handle("GET /api/v1/schools/{school_id}/courses",
-        tel.APMMiddleware(          // 1. starts NR transaction
-        tlog.Middleware(            // 2. structured logging + trace correlation
-        auth.Middleware(            // 3. authentication
-            handler,
-        ))),
-    )
-}
-```
+<v-clicks>
+
+- One `Initialize()` call in `main` wires up tracing + slog + trace correlation
+- One middleware chain to add on the routes
+- Every service starts from the **same baseline** - no team reinvents instrumentation
+
+</v-clicks>
+
+<v-click>
+
+<div class="mt-6 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 The library isn't the point - the <strong>pattern</strong> is. The lib just makes the right thing the easy thing, and hides the vendor SDK behind our own interface (so OTel later is a swap).
+</div>
+
+</v-click>
+
 <!--
-- **Order matters** - APM first so the transaction exists when log middleware runs
-- Health checks stay outside - no need to trace or log them
-- Each middleware is just `func(http.Handler) http.Handler`
+The lib was born from this migration. Instead of each service doing its own instrumentation, we centralized everything.
+Keep this to one slide - the audience doesn't need the internal architecture or bootstrap code.
+The value: consistency + a seam to swap the vendor SDK for OTel later.
 -->
 
 ---
@@ -751,77 +823,60 @@ resp, _ := client.Do(req) // Creates External segment + propagates trace headers
 </v-click>
 
 <!--
-Cada integração tem seu wrapper NR: nrpgx para Postgres, NewRoundTripper para HTTP, StartTransaction para SQS.
-O padrão é sempre o mesmo: ctx com transação → segmento automático.
+- Bag example
 -->
 
 ---
 
-# Custom Metrics and Async Flows
+# Async Flows Need a Context Too
 
-```go {all|1-5|7-13|all}
-// Custom business metrics - alert on what matters
-tel.RecordMetric("Custom/CoursesLoaded", float64(len(courses)))
-tel.IncrementMetric("Custom/API/Schools/Requests")
-// "Error rate > 5% on school 42" is actionable. Grepping logs is not.
+HTTP handlers get context from middleware. Workers have to create it.
 
-// SQS Consumer - treat messages like HTTP requests
+```go {all|3-5|7-9|all}
+// SQS Consumer - the message is the "request", so start the context here
 func (w *Worker) ProcessMessage(msg *sqs.Message) {
-    // Start a transaction manually - this is the "entry point"
+    // Manually start the entry point - the root of the trace
     txn := nrApp.StartTransaction("SQS/ProcessPurchase")
     defer txn.End()
     ctx := newrelic.NewContext(context.Background(), txn)
 
-    // From here, all downstream calls (DB, HTTP) are traced
-    order, err := w.repo.GetOrder(ctx, msg.OrderID)
-    w.notifier.Send(ctx, order)
+    // From here, ctx flows exactly like an HTTP request
+    order, _ := w.repo.GetOrder(ctx, msg.OrderID) // DB span + trace_id
+    w.notifier.Send(ctx, order)                   // HTTP span + trace_id
 }
 ```
 
-<v-clicks>
-
-<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
-💡 <b>Use metrics for alerts, not logs!</b><br>
-<b>HTTP handlers</b> get transactions from middleware automatically <br/>
-<b>Async workers</b> (SQS, Kafka, cron) need `StartTransaction` manually
-</div>
-
-
-
-</v-clicks>
-
-<!--
-Examplo dos alertas baseados em logs e não em metricas
--->
-
-
----
-layout: section
----
-
-# Multi-Runtime Challenges
-
----
-
-# The Polyglot Reality
-
-| Aspect | Go (shared lib) | Ruby (NR agent) | Java (NR agent) |
-|--------|-----------|-----------------|-----------------|
-| Instrumentation | Manual via library | Automatic agent | Automatic agent |
-| Trace propagation | Explicit via `ctx` | Agent handles | Agent handles |
-| Log correlation | Log middleware injects trace_id | Agent injects | Agent injects |
-| Migration effort | **High** (build library) | Low (swap agent) | Low (swap agent) |
-| Signal quality | High (intentional) | Variable (noisy) | Variable (noisy) |
-
 <v-click>
 
-**Key insight**: Go required the most effort but produced the **cleanest signals**. The investment paid off.
+<div class="mt-4 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 Same rule everywhere: create the context at the entry point, then propagate it. HTTP middleware does it for you; SQS/Kafka/cron workers do it by hand.
+</div>
 
 </v-click>
 
 <!--
-Ruby e Java: swap de agent, reinicia, done. Go exigiu criar a lib inteira.
-Mas o resultado em Go é muito mais limpo.
+Same playbook
+-->
+
+---
+disabled: true
+---
+
+# One Note on Polyglot
+
+Ruby and Java used **auto-agents** - swap the agent, restart, done. Go was the only stack where we designed propagation by hand.
+
+<v-click>
+
+<div class="mt-6 p-3 bg-blue-50 rounded dark:bg-blue-900">
+💡 Go took the most effort but produced the <strong>cleanest, most intentional signals</strong>. The trace headers are the common language that ties Go, Ruby, and Java into a single trace.
+</div>
+
+</v-click>
+
+<!--
+Keep polyglot to a single point - it's context, not the focus.
+The universal glue is W3C trace headers: every runtime speaks them, so a request traces end to end.
 -->
 
 ---
@@ -850,7 +905,7 @@ sequenceDiagram
 ```
 
 <!--
-O trace completo aparece no New Relic - Go, Ruby, externo - tudo conectado.
+The full trace shows up in New Relic - Go, Ruby, external - all connected.
 -->
 
 ---
@@ -861,59 +916,34 @@ layout: section
 
 ---
 
-# Next Steps 
+# Next Steps: Possibilities 
 
 <v-clicks>
 
-- **Third-party vendors now provide managed OTel Collectors** - no need to deploy and maintain our own
-- **We already proved this works** - eNotas (.NET/C#) is sending telemetry via vendor-managed OTel Collector
+- **OpenTelemetry** - our architecture is already compatible: same context propagation, same W3C headers. Moving to OTel is a swap, not a rewrite
 - **`go-easy-instrumentation`** - New Relic's tool that suggests instrumentation changes to Go source code automatically
-- **Alibaba + Datadog → OTel SIG** - Datadog's Orchestrion (compile-time instrumentation via `-toolexec`) was donated to OpenTelemetry, creating a vendor-neutral standard
-- **OTel Compile-Time Instrumentation (`otelc`)** - the result of that initiative; uses Go's `-toolexec` build flag to inject tracing at compilation, zero source code changes (v1 released July 2026)
+- **OTel Compile-Time Instrumentation (`otelc`)** - uses Go's `-toolexec` build flag to inject tracing at compilation, zero source code changes (v1 released July 2026)
 
 </v-clicks>
 
 <v-click>
 
-```bash
-# OTel compile-time instrumentation - just change how you build
-go build -toolexec otelc ./cmd/api
-# Same source code, instrumented binary. No manual spans needed.
-```
+<div class="mt-4 p-2 bg-blue-50 rounded dark:bg-blue-900 text-sm">
+💡 Bonus: clean, correlated data also powers AI agents (New Relic, Datadog) - good instrumentation pays off for humans and machines alike.
+</div>
 
 </v-click>
 
 <!--
-Orchestrion da Datadog foi o precursor - compile-time instrumentation usando -toolexec do Go.
-Em 2025, Alibaba e Datadog doaram seus engines para a OTel, formando a Go Compile-Time Instrumentation SIG.
-O resultado é o otelc - vendor neutral, v1 lançado em julho 2026.
-Já fizemos OTel com eNotas em C#. Go é o próximo passo.
-go-easy-instrumentation sugere mudanças no código fonte automaticamente (diff-based, mais simples).
--->
+Like Write a good prompt or context for ai agenst/Skill!
 
----
+Frame the future as: the reasons we skipped OTel no longer apply, and our design already mirrors it.
 
-# AI Agents & Observability(NOW)
+go-easy-instrumentation suggests source code changes automatically (diff-based, simpler).
 
-<v-clicks>
+otelc (from the Alibaba + Datadog SIG donation, v1 July 2026) is the vendor-neutral compile-time path.
 
-- AI skills connected to your observability provider (New Relic, Datadog, etc.) can analyze logs, metrics, and traces automatically
-- But they only work well if your data is **structured and correlated**
-- Consistent field names (`app_name`, `school_id`, `trace_id`) make search and reasoning possible
-- The investment in good instrumentation pays double - humans AND AI agents benefit
-
-</v-clicks>
-
-<v-click>
-
-> Good instrumentation is like writing a good prompt - the clearer the context, the better the answer.
-
-</v-click>
-
-<!--
-Experiência real usando AI agent do New Relic.
-Basicamente é um prompt bem feito - se seus dados são limpos, o agente consegue navegar.
-Se seus logs são fmt.Println, nenhum agente vai te ajudar.
+The AI angle stays as one bonus line - if data is structured and correlated, agents can navigate it.
 -->
 
 ---
@@ -939,7 +969,7 @@ disabled: true
 </v-clicks>
 
 <!--
-Esses são os aprendizados reais da migração. Cada um veio de um problema concreto.
+These are the real learnings from the migration. Each one came from a concrete problem.
 -->
 
 ---
@@ -950,17 +980,15 @@ layout: center
 
 <v-clicks>
 
-- Pass `context.Context` everywhere - it's how traces, logs, and metrics connect
+- **Correlation is the whole point** - a `trace_id` is what turns 3 separate signals into 1 story
+- Pass `context.Context` everywhere - it's the vehicle that carries that `trace_id`
 - Instrument at the edges (middleware/clients) - it covers 80% of what you need
-- Build a shared library - don't let each team reinvent instrumentation (otel?)
-- Good observability today = better AI/human debugging tomorrow
 - **Go's explicitness is a feature - intentional signals > automatic noise**
 
 </v-clicks>
 
 <!--
-Resumo prático: contexto, middleware, biblioteca compartilhada, pragmatismo.
-Go te força a ser explícito - e isso é uma vantagem.
+-
 -->
 
 ---
@@ -977,5 +1005,5 @@ Explicit, intentional, and architecturally sound.
 
 <!--
 GopherCon LATAM 2026
-Observabilidade não é sobre ferramentas - é sobre decisões de design.
+Observability is not about tools - it's about design decisions.
 -->

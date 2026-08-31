@@ -386,6 +386,34 @@ blockquote p {
   border-radius: 8px;
 }
 
+/* Full-width emphasis banner (used on the Automatic vs Manual slide) */
+.ctx-banner {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  padding: 1.4rem 3rem;
+  background: linear-gradient(90deg, var(--gc-purple-dark), var(--gc-purple));
+  border-top: 4px solid var(--gc-teal);
+  color: var(--gc-white);
+  text-align: center;
+  font-size: 1.5rem;
+  line-height: 1.4;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.ctx-banner code {
+  background-color: rgba(91, 192, 190, 0.2);
+  color: var(--gc-cyan);
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+}
+
+.ctx-banner strong {
+  color: var(--gc-cyan);
+}
+
 /* ============================================
    SONS PHOTO — Circular format, bottom-right
    ============================================ */
